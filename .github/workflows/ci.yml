@@ -1,0 +1,135 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Install Python
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        working-directory: backend
+        run: uv sync --frozen
+
+      - name: Ruff
+        working-directory: backend
+        run: uv run ruff check .
+
+      - name: Mypy
+        working-directory: backend
+        run: uv run mypy app
+
+      - name: Pytest (unit tests only -- no live Postgres/Redis in this job)
+        working-directory: backend
+        run: uv run pytest -m "not integration"
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Lint
+        working-directory: frontend
+        run: npm run lint
+
+      - name: Typecheck
+        working-directory: frontend
+        run: npm run typecheck
+
+      - name: Build
+        working-directory: frontend
+        run: npm run build
+
+      - name: Test
+        working-directory: frontend
+        run: npm test
+
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  dependency-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Install Python
+        run: uv python install 3.12
+
+      # Non-blocking for Phase 0: there is no triage process yet for
+      # findings, so this job reports but never fails the pipeline.
+      - name: pip-audit (backend)
+        working-directory: backend
+        run: |
+          uv export --frozen --no-dev --format requirements-txt > requirements.txt
+          uvx pip-audit -r requirements.txt || true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: npm audit (frontend)
+        working-directory: frontend
+        run: |
+          npm ci
+          npm audit || true
+
+  smoke-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare environment file
+        run: cp .env.example .env
+
+      - name: Build and start the default profile
+        run: docker compose up -d --build
+
+      - name: Wait for services to become healthy
+        run: ./scripts/wait_for_healthy.sh
+
+      - name: Check health endpoints
+        run: |
+          curl -sf http://localhost:8000/healthz
+          curl -sf http://localhost:8000/readyz
+
+      - name: Show logs on failure
+        if: failure()
+        run: docker compose logs
+
+      - name: Tear down
+        if: always()
+        run: docker compose down -v

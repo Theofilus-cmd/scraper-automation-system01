@@ -1,0 +1,306 @@
+name: scraper-automation-system
+
+# Service/profile map (see docs/design/16-phase-0-walking-skeleton-plan.md §D):
+#   - No `profiles:` key      -> starts by default with `docker compose up`
+#   - profiles: ["browser"]   -> opt-in via `docker compose --profile browser up`
+#   - profiles: ["workers"]   -> opt-in via `docker compose --profile workers up`
+#   - profiles: ["storage"]   -> opt-in via `docker compose --profile storage up`
+#   - profiles: ["monitoring"]-> opt-in via `docker compose --profile monitoring up`
+# Combine profiles by chaining flags, e.g.:
+#   docker compose --profile browser --profile workers up -d --build
+# Production sets COMPOSE_PROFILES=browser,workers,storage,monitoring in its
+# .env, so the full topology below is unchanged there (doc 14 §1).
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-scraper}
+      POSTGRES_USER: ${POSTGRES_USER:-scraper}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me-locally}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-scraper} -d ${POSTGRES_DB:-scraper}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+    restart: unless-stopped
+
+  pgbouncer:
+    image: edoburu/pgbouncer:latest
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-scraper}:${POSTGRES_PASSWORD:-change-me-locally}@postgres:5432/${POSTGRES_DB:-scraper}
+      POOL_MODE: transaction
+      MAX_CLIENT_CONN: 200
+      DEFAULT_POOL_SIZE: 20
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "6432:6432"
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+    restart: unless-stopped
+
+  mailhog:
+    image: mailhog/mailhog:latest
+    ports:
+      - "8025:8025"
+    restart: unless-stopped
+
+  migrate:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://scraper:change-me-locally@pgbouncer:6432/scraper}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      pgbouncer:
+        condition: service_started
+    restart: "no"
+
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://scraper:change-me-locally@pgbouncer:6432/scraper}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+    ports:
+      - "8000:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      pgbouncer:
+        condition: service_started
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    environment:
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+    restart: unless-stopped
+
+  scheduler:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: ["python", "-m", "app.scheduler.main"]
+    environment:
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://scraper:change-me-locally@pgbouncer:6432/scraper}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      SCHEDULER_HEARTBEAT_INTERVAL_SECONDS: ${SCHEDULER_HEARTBEAT_INTERVAL_SECONDS:-15}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      pgbouncer:
+        condition: service_started
+      redis:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+    restart: unless-stopped
+
+  worker-http:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: ["celery", "-A", "app.workers.celery_app", "worker", "-Q", "http", "-c", "${HTTP_WORKER_CONCURRENCY:-2}", "--loglevel=info"]
+    environment:
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://scraper:change-me-locally@pgbouncer:6432/scraper}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      pgbouncer:
+        condition: service_started
+      redis:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+    restart: unless-stopped
+
+  mock-store:
+    build:
+      context: ./tools/mock-store
+      dockerfile: Dockerfile
+    ports:
+      - "4000:4000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4000/healthz')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  worker-browser:
+    profiles: ["browser"]
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: ["celery", "-A", "app.workers.celery_app", "worker", "-Q", "browser", "-c", "${BROWSER_WORKER_CONCURRENCY:-2}", "--loglevel=info"]
+    environment:
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://scraper:change-me-locally@pgbouncer:6432/scraper}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      pgbouncer:
+        condition: service_started
+      redis:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+    restart: unless-stopped
+
+  worker-notifications:
+    profiles: ["workers"]
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: ["celery", "-A", "app.workers.celery_app", "worker", "-Q", "notifications", "-c", "2", "--loglevel=info"]
+    environment:
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://scraper:change-me-locally@pgbouncer:6432/scraper}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      pgbouncer:
+        condition: service_started
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  worker-exports:
+    profiles: ["workers"]
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: ["celery", "-A", "app.workers.celery_app", "worker", "-Q", "exports", "-c", "2", "--loglevel=info"]
+    environment:
+      ENVIRONMENT: ${ENVIRONMENT:-development}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://scraper:change-me-locally@pgbouncer:6432/scraper}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      pgbouncer:
+        condition: service_started
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  minio:
+    profiles: ["storage"]
+    image: minio/minio:latest
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-scraper-minio-admin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-change-me-locally}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    restart: unless-stopped
+
+  flower:
+    profiles: ["monitoring"]
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: ["celery", "-A", "app.workers.celery_app", "flower", "--port=5555"]
+    environment:
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+    ports:
+      - "5555:5555"
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  prometheus:
+    profiles: ["monitoring"]
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    restart: unless-stopped
+
+  grafana:
+    profiles: ["monitoring"]
+    image: grafana/grafana:latest
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-change-me-locally}
+    ports:
+      - "3001:3000"
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:
+  minio_data:

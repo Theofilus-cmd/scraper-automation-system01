@@ -1,0 +1,51 @@
+[project]
+name = "scraper-automation-backend"
+version = "0.1.0"
+description = "API, scheduler, and worker processes for the scraper automation system (Phase 0 walking skeleton)."
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115,<0.116",
+    "uvicorn[standard]>=0.32,<0.33",
+    "pydantic>=2.9,<3",
+    "pydantic-settings>=2.6,<3",
+    "sqlalchemy[asyncio]>=2.0,<2.1",
+    "asyncpg>=0.30,<0.31",
+    "alembic>=1.13,<1.14",
+    "celery[redis]>=5.4,<5.5",
+    "redis>=5.1,<6",
+    "flower>=2.0,<3",
+    "python-json-logger>=2.0,<3",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3,<9",
+    "pytest-asyncio>=0.24,<0.25",
+    "httpx>=0.27,<0.28",
+    "ruff>=0.7,<0.8",
+    "mypy>=1.13,<2",
+]
+
+[tool.uv]
+package = false
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+exclude = ["app/db/migrations/"]
+
+[[tool.mypy.overrides]]
+module = "celery.*"
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+markers = [
+    "integration: requires a live Postgres + Redis (run inside the api container)",
+]

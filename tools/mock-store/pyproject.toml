@@ -1,0 +1,12 @@
+[project]
+name = "mock-store"
+version = "0.1.0"
+description = "Minimal static HTTP target used for local Phase 0 smoke-testing -- not a scraping target adapter."
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115,<0.116",
+    "uvicorn[standard]>=0.32,<0.33",
+]
+
+[tool.uv]
+package = false
