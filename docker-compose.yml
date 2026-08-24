@@ -47,6 +47,26 @@ services:
       # explicitly makes the internal port match the host mapping below and
       # every DATABASE_URL in this file, instead of silently defaulting.
       LISTEN_PORT: "6432"
+      # AUTH_TYPE defaults to "md5" in this image's entrypoint if unset. On
+      # md5, the entrypoint writes an MD5 hash of the password into
+      # userlist.txt -- and pgbouncer only ever authenticates to the real
+      # Postgres backend using whatever credential form it has stored. With
+      # only an MD5 hash on hand, pgbouncer cannot complete a SCRAM
+      # handshake, and postgres:16-alpine's default `password_encryption`
+      # is scram-sha-256, so the backend refuses the md5-based login --
+      # this is the exact "server login failed: wrong password type" error
+      # pgbouncer logs and relays to clients (confirmed via its
+      # entrypoint.sh: the userlist-generation branch keyed on AUTH_TYPE).
+      # Setting AUTH_TYPE to scram-sha-256 makes that same entrypoint logic
+      # write the *plaintext* password into userlist.txt instead of a
+      # hash, which lets pgbouncer complete real SCRAM-SHA-256 auth on both
+      # legs: to Postgres as a client, and to every service below as a
+      # server. (A pre-computed SCRAM verifier in userlist.txt, instead of
+      # a plaintext password, is a known-broken combination with this
+      # auth_type -- see pgbouncer/pgbouncer#1186 -- which is why the fix
+      # is to let the entrypoint keep deriving the password from
+      # DATABASE_URL rather than hardcoding a hash here.)
+      AUTH_TYPE: "scram-sha-256"
     depends_on:
       postgres:
         condition: service_healthy
