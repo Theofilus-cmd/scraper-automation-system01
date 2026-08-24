@@ -39,11 +39,24 @@ services:
       POOL_MODE: transaction
       MAX_CLIENT_CONN: 200
       DEFAULT_POOL_SIZE: 20
+      # This image's entrypoint writes `listen_port = ${LISTEN_PORT:-5432}`
+      # into pgbouncer.ini -- without this, it listens on 5432 internally
+      # (confirmed via its entrypoint.sh, and via a real run: every other
+      # service here has always correctly targeted pgbouncer:6432, so the
+      # container's own listen port was the only thing wrong). Setting it
+      # explicitly makes the internal port match the host mapping below and
+      # every DATABASE_URL in this file, instead of silently defaulting.
+      LISTEN_PORT: "6432"
     depends_on:
       postgres:
         condition: service_healthy
     ports:
       - "6432:6432"
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "localhost", "-p", "6432"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
     restart: unless-stopped
 
   redis:
@@ -80,7 +93,7 @@ services:
       postgres:
         condition: service_healthy
       pgbouncer:
-        condition: service_started
+        condition: service_healthy
     restart: "no"
 
   api:
@@ -99,7 +112,7 @@ services:
       migrate:
         condition: service_completed_successfully
       pgbouncer:
-        condition: service_started
+        condition: service_healthy
       redis:
         condition: service_healthy
     healthcheck:
@@ -142,7 +155,7 @@ services:
       migrate:
         condition: service_completed_successfully
       pgbouncer:
-        condition: service_started
+        condition: service_healthy
       redis:
         condition: service_healthy
     deploy:
@@ -166,7 +179,7 @@ services:
       migrate:
         condition: service_completed_successfully
       pgbouncer:
-        condition: service_started
+        condition: service_healthy
       redis:
         condition: service_healthy
     deploy:
@@ -205,7 +218,7 @@ services:
       migrate:
         condition: service_completed_successfully
       pgbouncer:
-        condition: service_started
+        condition: service_healthy
       redis:
         condition: service_healthy
     deploy:
@@ -230,7 +243,7 @@ services:
       migrate:
         condition: service_completed_successfully
       pgbouncer:
-        condition: service_started
+        condition: service_healthy
       redis:
         condition: service_healthy
     restart: unless-stopped
@@ -250,7 +263,7 @@ services:
       migrate:
         condition: service_completed_successfully
       pgbouncer:
-        condition: service_started
+        condition: service_healthy
       redis:
         condition: service_healthy
     restart: unless-stopped
