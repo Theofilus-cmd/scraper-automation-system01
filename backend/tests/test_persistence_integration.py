@@ -30,7 +30,12 @@ from app.db.models.repository import upsert_scrape_result
 from app.db.models.scraping import CurrentObservation, Product, Source
 from app.db.session import get_session
 from app.scraping.types import NormalizedRecord, ValidationResult
-from tests.factories import create_source_run_task, create_test_run, create_test_task
+from tests.factories import (
+    create_source_run_task,
+    create_test_run,
+    create_test_task,
+    finalize_run_and_task,
+)
 
 pytestmark = pytest.mark.integration
 
@@ -89,13 +94,31 @@ async def _history_rows_for_product(product_id: uuid.UUID) -> list[ObservationHi
         return list(result.scalars().all())
 
 
-async def _new_run_task_for_source(source_id: uuid.UUID) -> tuple[uuid.UUID, uuid.UUID]:
+async def _new_run_task_for_source(
+    source_id: uuid.UUID, *, finalizing: tuple[uuid.UUID, uuid.UUID]
+) -> tuple[uuid.UUID, uuid.UUID]:
     """A second (or third...) scrape *event* for an already-existing
     source is, in the real system, always a new run with its own new task
     -- never a second call against the same task_id (doc 18 §2.3's
     cardinality note: a task is retried, a run is not re-created). Mirrors
     that here rather than reusing the first call's ids.
+
+    Acceptance-review fix: `finalizing` is the `(run_id, task_id)` of the
+    scrape that just completed, successfully, immediately before this
+    call -- finalized to a terminal state via `finalize_run_and_task()`
+    before the new run/task are created. `uq_runs_one_in_flight_per_source`
+    (migration 0003) rejects a second `'running'` row for the same
+    `source_id`; every test in this file that scrapes the same source
+    twice used to hit "duplicate key violates
+    uq_runs_one_in_flight_per_source" on its second `create_test_run()`
+    call here, since `create_source_run_task()`'s first run was never
+    advanced off its factory-default `'running'` status. This finalizes
+    the real, prior run first -- the same order production itself
+    enforces (doc 18 §4.4: a second run cannot be created until the first
+    genuinely finishes) -- rather than relaxing the constraint or picking
+    a new-row status that merely happens not to collide with it.
     """
+    await finalize_run_and_task(*finalizing)
     run = await create_test_run(source_id)
     task = await create_test_task(run.id, source_id)
     return run.id, task.id
@@ -143,7 +166,7 @@ async def test_repeat_valid_scrape_updates_in_place_not_duplicated() -> None:
         record=_valid_record(source.url, price="19.99"),
         validation=ValidationResult(is_valid=True, errors={}),
     )
-    run2_id, task2_id = await _new_run_task_for_source(source.id)
+    run2_id, task2_id = await _new_run_task_for_source(source.id, finalizing=(run.id, task.id))
     second = await upsert_scrape_result(
         source_id=source.id,
         run_id=run2_id,
@@ -175,7 +198,7 @@ async def test_changed_field_appends_history_row_with_diff_only() -> None:
         record=_valid_record(source.url, price="19.99", stock_status="in_stock"),
         validation=ValidationResult(is_valid=True, errors={}),
     )
-    run2_id, task2_id = await _new_run_task_for_source(source.id)
+    run2_id, task2_id = await _new_run_task_for_source(source.id, finalizing=(run.id, task.id))
     second = await upsert_scrape_result(
         source_id=source.id,
         run_id=run2_id,
@@ -207,7 +230,7 @@ async def test_unchanged_valid_rescrape_appends_no_history_row() -> None:
         record=_valid_record(source.url, price="19.99"),
         validation=ValidationResult(is_valid=True, errors={}),
     )
-    run2_id, task2_id = await _new_run_task_for_source(source.id)
+    run2_id, task2_id = await _new_run_task_for_source(source.id, finalizing=(run.id, task.id))
     second = await upsert_scrape_result(
         source_id=source.id,
         run_id=run2_id,
@@ -239,7 +262,7 @@ async def test_invalid_write_after_valid_leaves_prior_snapshot_standing() -> Non
     )
     assert valid_result.product_id is not None
 
-    run2_id, task2_id = await _new_run_task_for_source(source.id)
+    run2_id, task2_id = await _new_run_task_for_source(source.id, finalizing=(run.id, task.id))
     invalid_result = await upsert_scrape_result(
         source_id=source.id,
         run_id=run2_id,

@@ -18,6 +18,8 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
+from sqlalchemy import select
+
 from app.db.models.lifecycle import Run, Task
 from app.db.models.scraping import Source
 from app.db.models.sources_repository import create_or_get_source
@@ -118,3 +120,43 @@ async def create_source_run_task(
     run = await create_test_run(source.id, status=run_status)
     task = await create_test_task(run.id, source.id, status=task_status)
     return source, run, task
+
+
+async def finalize_run_and_task(
+    run_id: uuid.UUID,
+    task_id: uuid.UUID,
+    *,
+    run_status: str = "completed",
+    task_status: str = "succeeded",
+) -> None:
+    """Directly transitions a run+task to a terminal state -- mirrors what
+    app/workers/tasks_http.py's own `_finalize_task()` /
+    `_finalize_task_success()` / `_finalize_task_failure()` do in
+    production once a real scrape genuinely finishes, without importing
+    that module's private functions into tests that deliberately exercise
+    `upsert_scrape_result()` in isolation from it -- that function never
+    touches run/task status at all (see repository.py's own module
+    docstring), so nothing else in this test suite does it on its behalf.
+
+    Needed before a test can create a SECOND run for the same source:
+    `uq_runs_one_in_flight_per_source` (migration 0003) rejects any second
+    row with `status IN ('pending', 'running')` for one `source_id` -- a
+    run left sitting at `create_test_run()`'s `'running'` default forever
+    would make a second scrape *event* for that source impossible to set
+    up at all, exactly as it genuinely would be in production, where a
+    second run cannot be created until the first really finishes (doc 18
+    §4.4). Call this on the prior run/task before creating the next one,
+    rather than picking a status for the new row that merely happens not
+    to collide with the partial unique index's `WHERE` clause -- that
+    would leave the prior run permanently, unrealistically stuck at
+    `'running'` even though its scrape genuinely succeeded.
+    """
+    async with get_session() as session:
+        run = (await session.execute(select(Run).where(Run.id == run_id))).scalar_one()
+        task = (await session.execute(select(Task).where(Task.id == task_id))).scalar_one()
+        now = datetime.now(UTC)
+        run.status = run_status
+        run.finished_at = now
+        task.status = task_status
+        task.finished_at = now
+        await session.commit()
