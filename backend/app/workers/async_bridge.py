@@ -46,7 +46,7 @@ from typing import Any, TypeVar
 from celery.signals import worker_process_shutdown
 
 from app.core.logging import get_logger
-from app.db.session import get_engine
+from app.db.session import dispose_engine_for_current_loop
 
 logger = get_logger(__name__)
 
@@ -96,16 +96,16 @@ def _reset_loop_for_tests() -> None:
 @worker_process_shutdown.connect
 def _dispose_engine_and_loop(**_kwargs: object) -> None:
     """Fires once, just before a prefork child process exits. Disposing
-    the engine first closes every pooled connection while the loop that
-    owns them is still alive to run that cleanup -- closing the loop
-    first would abandon them instead, the same leak this module exists to
-    avoid.
+    the engine (via app.db.session's loop-keyed cache -- doc 17 hotfix)
+    first closes every pooled connection while the loop that owns them is
+    still alive to run that cleanup -- closing the loop first would
+    abandon them instead, the same leak this module exists to avoid.
     """
     global _loop
     if _loop is None or _loop.is_closed():
         return
     try:
-        _loop.run_until_complete(get_engine().dispose())
+        _loop.run_until_complete(dispose_engine_for_current_loop())
     except Exception:
         logger.exception("error disposing async engine during worker shutdown")
     finally:
