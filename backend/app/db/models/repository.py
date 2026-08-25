@@ -232,7 +232,20 @@ async def upsert_scrape_result(
             extra={
                 "source_id": str(source_id),
                 "product_id": str(product_id),
-                "created": created,
+                # NOT "created": logging.Logger.makeRecord() raises KeyError
+                # for any extra= key that collides with a stdlib LogRecord
+                # attribute name, and `created` is one (LogRecord.created is
+                # the record's own creation timestamp, set in
+                # LogRecord.__init__ regardless of what a caller passes).
+                # That crashed every successful scrape write with
+                # KeyError: "Attempt to overwrite 'created' in LogRecord"
+                # AFTER the DB commit above had already succeeded -- doc 17
+                # hotfix #4. tests/test_logging_extra_keys.py statically
+                # audits every extra={...} call site under app/ against the
+                # full reserved set so this class of bug can't recur
+                # silently; tests/test_repository_logging.py reproduces this
+                # exact call shape directly against the real logging module.
+                "product_created": created,
             },
         )
 
