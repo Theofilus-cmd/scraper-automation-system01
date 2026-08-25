@@ -7,9 +7,16 @@ fetch->parse->normalize->validate->persist pipeline, dispatched by
 `POST /api/v1/scrapes` (app/api/v1/scrapes.py).
 
 Celery invokes tasks synchronously; there is no running event loop inside
-a worker process (matching app/scheduler/main.py's own sync entrypoint,
-which wraps a single top-level `asyncio.run()`), so every async call this
-task needs (fetch, DB) is bridged via one `asyncio.run()` per invocation.
+a worker process, so every async call this task needs (fetch, DB) is
+bridged via `app.workers.async_bridge.run_async()` -- ONE persistent
+event loop reused across every task this worker process ever runs, not a
+fresh `asyncio.run()` per invocation (doc 17 hotfix: the latter tore down
+the loop the shared async DB engine's connection pool depended on,
+breaking every task after the first -- see async_bridge.py's module
+docstring for the full root cause). `app/scheduler/main.py` is unrelated
+to this: it wraps a single top-level `asyncio.run()` for its entire
+process lifetime (one loop, never repeated), which never hits this
+failure mode.
 
 Task results go through Celery's default JSON result serializer, which
 cannot represent Decimal/datetime/UUID natively -- every such value is
@@ -17,7 +24,6 @@ converted to a plain str before being returned (`_jsonify_observation()`,
 `str(...)` on ids) rather than relying on Kombu's encoder internals.
 """
 
-import asyncio
 from datetime import datetime
 from decimal import Decimal
 from typing import Any
@@ -29,6 +35,7 @@ from app.scraping.adapters import registry
 from app.scraping.fetcher import FetchError
 from app.scraping.normalize import normalize
 from app.scraping.types import ExtractionSchema, FetchContext
+from app.workers.async_bridge import run_async
 from app.workers.celery_app import celery_app
 
 logger = get_logger(__name__)
@@ -134,7 +141,7 @@ async def _scrape_source_url(source_url: str) -> dict[str, Any]:
 @celery_app.task(name="app.workers.tasks_http.scrape_source_url")
 def scrape_source_url(source_url: str) -> dict[str, Any]:
     logger.info("scrape task started", extra={"source_url": source_url, "queue": "http"})
-    result: dict[str, Any] = asyncio.run(_scrape_source_url(source_url))
+    result: dict[str, Any] = run_async(_scrape_source_url(source_url))
     logger.info(
         "scrape task finished",
         extra={"source_url": source_url, "status": result.get("status")},
