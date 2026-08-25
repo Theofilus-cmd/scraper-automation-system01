@@ -40,8 +40,8 @@ close cleanly while its loop is still alive to run that cleanup.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Coroutine
-from typing import Any, TypeVar
+from collections.abc import Callable, Coroutine
+from typing import Any, TypeVar, cast
 
 from celery.signals import worker_process_shutdown
 
@@ -93,7 +93,28 @@ def _reset_loop_for_tests() -> None:
     _loop = None
 
 
-@worker_process_shutdown.connect
+_ShutdownHandler = Callable[..., None]
+
+
+def _connect_shutdown_handler(handler: _ShutdownHandler) -> _ShutdownHandler:
+    """Precisely typed stand-in for `@worker_process_shutdown.connect`
+    itself. `celery.*` has no installable stub package this project can
+    pin (see `app/workers/celery_app.py`'s docstring for the full "why"
+    -- same root cause, same `pyproject.toml` override), so
+    `worker_process_shutdown` -- and its `.connect` method -- resolve as
+    `Any` under mypy; decorating directly with `@worker_process_shutdown.
+    connect` therefore made `_dispose_engine_and_loop` below untyped end
+    to end (`disallow_untyped_decorators`, part of this project's
+    `strict = true`). This is the one, single, narrow place the real,
+    untyped `.connect(...)` call happens; at runtime it still registers
+    the exact same real signal handler, unchanged -- only the *static*
+    type mypy assigns to the decorated name changes, narrowed here via
+    one documented `cast()` rather than left as `Any`.
+    """
+    return cast(_ShutdownHandler, worker_process_shutdown.connect(handler))
+
+
+@_connect_shutdown_handler
 def _dispose_engine_and_loop(**_kwargs: object) -> None:
     """Fires once, just before a prefork child process exits. Disposing
     the engine (via app.db.session's loop-keyed cache -- doc 17 hotfix)

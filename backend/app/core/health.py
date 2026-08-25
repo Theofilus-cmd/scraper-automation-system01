@@ -11,11 +11,11 @@ Compose profile, so readiness must not depend on it.
 
 from typing import Any
 
-import redis.asyncio as redis
 from fastapi import APIRouter, Response
 
 from app.core.config import get_settings
 from app.core.logging import get_logger
+from app.core.redis_client import get_async_redis_client
 from app.db.session import check_database_connection
 
 router = APIRouter()
@@ -52,7 +52,7 @@ async def readyz(response: Response) -> dict[str, Any]:
 
 
 async def _check_redis(redis_url: str) -> bool:
-    client = redis.from_url(redis_url)
+    client = get_async_redis_client(redis_url)
     try:
         await client.ping()
         return True

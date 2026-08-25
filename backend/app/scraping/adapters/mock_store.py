@@ -17,7 +17,7 @@ import json
 from typing import ClassVar
 from urllib.parse import urlparse
 
-from selectolax.parser import HTMLParser  # type: ignore[import-untyped]
+from selectolax.parser import HTMLParser
 
 from app.core.config import get_settings
 from app.core.logging import get_logger

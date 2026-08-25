@@ -116,11 +116,23 @@ async def _upsert_product(
     update_columns = {
         k: getattr(stmt.excluded, k) for k in ("product_url", "sku", "source_product_id")
     }
-    stmt = stmt.on_conflict_do_update(
+    # A separate name, not a reassignment of `stmt`: `.returning(...)`
+    # changes the statement's type from `Insert` (what `stmt` above is)
+    # to the generic `ReturningInsert[Any]` -- a real SQLAlchemy typing
+    # distinction (`Insert.returning()` -> `ReturningInsert[_TP]`, per
+    # SQLAlchemy's own stubs), not an artifact of this codebase. Reusing
+    # `stmt` for both would make mypy check the second assignment's
+    # `ReturningInsert[Any]` expression against `stmt`'s type as fixed by
+    # its first assignment (`Insert`), reporting "Incompatible types in
+    # assignment" -- acceptance-review fix: a fresh name for the final,
+    # correctly-`ReturningInsert`-typed statement sidesteps that
+    # entirely, with no cast needed and no behavior change (the
+    # statement built is identical either way).
+    upsert_stmt = stmt.on_conflict_do_update(
         constraint="uq_products_source_identity", set_=update_columns
     ).returning(table.c.id, text("(xmax = 0) AS created"))
 
-    row = (await session.execute(stmt)).one()
+    row = (await session.execute(upsert_stmt)).one()
     product_id: uuid.UUID = row.id
     created: bool = bool(row.created)
     return product_id, created

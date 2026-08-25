@@ -5,12 +5,12 @@ arrives in a later phase.
 """
 
 from app.core.logging import get_logger
-from app.workers.celery_app import celery_app
+from app.workers.celery_app import typed_task
 
 logger = get_logger(__name__)
 
 
-@celery_app.task(name="app.workers.tasks_exports.ping")
+@typed_task(name="app.workers.tasks_exports.ping")
 def ping() -> dict[str, str]:
     logger.info("ping task executed", extra={"queue": "exports"})
     return {"queue": "exports", "status": "pong"}

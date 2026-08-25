@@ -26,10 +26,9 @@ import asyncio
 import signal
 from datetime import timedelta
 
-import redis.asyncio as redis
-
 from app.core.config import get_settings
 from app.core.logging import get_logger
+from app.core.redis_client import get_async_redis_client
 from app.db.models.retention import purge_expired_history
 from app.db.models.runs_repository import claim_due_schedules, reconciliation_sweep
 from app.db.session import check_database_connection
@@ -38,7 +37,7 @@ logger = get_logger(__name__)
 
 
 async def _check_redis(redis_url: str) -> bool:
-    client = redis.from_url(redis_url)
+    client = get_async_redis_client(redis_url)
     try:
         await client.ping()
         return True

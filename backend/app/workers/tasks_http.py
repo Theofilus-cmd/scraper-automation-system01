@@ -49,7 +49,7 @@ from app.scraping.fetcher import FetchError
 from app.scraping.normalize import normalize
 from app.scraping.types import ExtractionSchema, FetchContext
 from app.workers.async_bridge import run_async
-from app.workers.celery_app import celery_app
+from app.workers.celery_app import typed_bound_task, typed_task
 
 logger = get_logger(__name__)
 
@@ -221,7 +221,7 @@ async def _finalize_task_dead_letter(
     )
 
 
-@celery_app.task(name="app.workers.tasks_http.ping")
+@typed_task(name="app.workers.tasks_http.ping")
 def ping() -> dict[str, str]:
     logger.info("ping task executed", extra={"queue": "http"})
     return {"queue": "http", "status": "pong"}
@@ -310,7 +310,7 @@ async def _scrape_source_url_for_task(task_id: uuid.UUID, *, attempt: int) -> di
     }
 
 
-@celery_app.task(
+@typed_bound_task(
     name="app.workers.tasks_http.scrape_source_url",
     bind=True,
     retry_backoff=True,
