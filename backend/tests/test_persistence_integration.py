@@ -91,6 +91,14 @@ async def test_first_sighting_valid_creates_product_and_observation() -> None:
     assert observation is not None
     assert observation.price == Decimal("19.99")
     assert observation.is_valid is True
+    # doc 17 hotfix regression: this is the exact scenario that raised
+    # asyncpg.exceptions.DataError ("can't subtract offset-naive and
+    # offset-aware datetimes") before app/db/models/base.py's
+    # type_annotation_map fix -- a first-ever valid write, whose
+    # scraped_at (_valid_record() below uses datetime.now(UTC)) is
+    # timezone-aware. A real round trip through Postgres must hand the
+    # same tz-aware value back, not silently drop the offset.
+    assert observation.scraped_at.tzinfo is not None
 
 
 async def test_repeat_valid_scrape_updates_in_place_not_duplicated() -> None:
