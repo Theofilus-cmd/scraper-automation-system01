@@ -1,0 +1,16 @@
+[
+  {
+    "product_name": "Acme Widget - Yellow",
+    "brand": "ACME",
+    "category": "Home > Widgets",
+    "price": "24.50",
+    "price_currency": "USD",
+    "sku": "WIDGET-YELLOW-004",
+    "product_id": "10004",
+    "stock_status_raw": "https://schema.org/InStock",
+    "rating": "4.8",
+    "review_count": "lots",
+    "description": "A cheerful yellow widget. Customer-favorite finish.",
+    "image_url": "/images/widget-yellow.jpg"
+  }
+]

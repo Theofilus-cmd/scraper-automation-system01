@@ -1,0 +1,16 @@
+[
+  {
+    "product_name": "Acme Widget - Red",
+    "brand": "ACME",
+    "category": "Home > Widgets",
+    "price": "29.99",
+    "price_currency": "USD",
+    "sku": "WIDGET-RED-002",
+    "product_id": "10002",
+    "stock_status_raw": "https://schema.org/OutOfStock",
+    "rating": "4.2",
+    "review_count": "56",
+    "description": "The same great widget, now in red. Currently unavailable while we restock.",
+    "image_url": "/images/widget-red.jpg"
+  }
+]

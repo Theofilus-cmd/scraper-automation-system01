@@ -1,0 +1,16 @@
+[
+  {
+    "product_name": "Acme Widget - Green (Preview)",
+    "brand": "ACME",
+    "category": "Home > Widgets",
+    "price": null,
+    "price_currency": "USD",
+    "sku": "WIDGET-GREEN-003",
+    "product_id": "10003",
+    "stock_status_raw": "https://schema.org/PreOrder",
+    "rating": null,
+    "review_count": null,
+    "description": "Coming soon. Pricing has not been finalized for this listing.",
+    "image_url": "/images/widget-green.jpg"
+  }
+]

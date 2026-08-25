@@ -126,6 +126,15 @@ jobs:
           curl -sf http://localhost:8000/healthz
           curl -sf http://localhost:8000/readyz
 
+      # doc 12: real Postgres/Redis/Celery worker, task_always_eager=False
+      # -- runs inside the already-built, already-running api container
+      # (its image includes the dev dependency group and tests/, see
+      # backend/Dockerfile), against the rest of the default-profile
+      # stack this job already brought up, including worker-http and
+      # mock-store (doc 17).
+      - name: Run integration tests
+        run: docker compose exec -T api pytest -m integration
+
       - name: Show logs on failure
         if: failure()
         run: docker compose logs

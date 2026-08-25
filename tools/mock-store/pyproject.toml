@@ -1,7 +1,7 @@
 [project]
 name = "mock-store"
 version = "0.1.0"
-description = "Minimal static HTTP target used for local Phase 0 smoke-testing -- not a scraping target adapter."
+description = "Local HTTP target for smoke-testing and Phase 1's MockStoreAdapter -- not a real marketplace."
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.115,<0.116",

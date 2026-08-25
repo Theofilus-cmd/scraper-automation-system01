@@ -15,13 +15,20 @@ dependencies = [
     "redis>=5.1,<6",
     "flower>=2.0,<3",
     "python-json-logger>=2.0,<3",
+    # Phase 1 (doc 17): the SSRF-hardened fetcher (app/scraping/fetcher.py)
+    # and the mock-store adapter's HTML/JSON-LD parsing. httpx was
+    # dev-only (via TestClient) through Phase 0; it's a real runtime
+    # dependency starting here. selectolax per doc 04 §4.4's already-
+    # approved parser choice (Modest/lexbor-based, faster than
+    # BeautifulSoup for the static path).
+    "httpx>=0.27,<0.28",
+    "selectolax>=0.3,<0.4",
 ]
 
 [dependency-groups]
 dev = [
     "pytest>=8.3,<9",
     "pytest-asyncio>=0.24,<0.25",
-    "httpx>=0.27,<0.28",
     "ruff>=0.7,<0.8",
     "mypy>=1.13,<2",
 ]
@@ -49,3 +56,9 @@ ignore_missing_imports = true
 markers = [
     "integration: requires a live Postgres + Redis (run inside the api container)",
 ]
+# pytest-asyncio was a Phase 0 dependency with nothing yet to test (every
+# Phase 0 test used the synchronous TestClient). Phase 1 (doc 17) adds
+# real `async def` tests (the fetcher, upsert_scrape_result()) -- "auto"
+# runs any `async def test_*` directly, no per-test @pytest.mark.asyncio
+# needed.
+asyncio_mode = "auto"

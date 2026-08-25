@@ -126,6 +126,10 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://scraper:change-me-locally@pgbouncer:6432/scraper}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      # Phase 1 (doc 17): registry.detect()'s hostname check (pure, no
+      # network call) runs in the API process, so it needs this too, even
+      # though the API never calls mock-store directly.
+      MOCK_STORE_BASE_URL: ${MOCK_STORE_BASE_URL:-http://mock-store:4000}
     ports:
       - "8000:8000"
     depends_on:
@@ -195,12 +199,17 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://scraper:change-me-locally@pgbouncer:6432/scraper}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      # Phase 1 (doc 17): scrape_source_url's real target -- the only
+      # process that ever actually calls mock-store over HTTP.
+      MOCK_STORE_BASE_URL: ${MOCK_STORE_BASE_URL:-http://mock-store:4000}
     depends_on:
       migrate:
         condition: service_completed_successfully
       pgbouncer:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      mock-store:
         condition: service_healthy
     deploy:
       resources:

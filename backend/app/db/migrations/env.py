@@ -15,14 +15,18 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from app.core.config import get_settings
+from app.db.models.base import Base
 
 config = context.config
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# No ORM models yet in Phase 0; migrations are written by hand.
-target_metadata = None
+# Phase 1 introduces real ORM models (app/db/models/); wired here so
+# `alembic check`/future autogenerate can compare against them. Migrations
+# themselves stay hand-written (see 0002's docstring) -- this does not
+# turn on autogenerate, it only makes target_metadata accurate.
+target_metadata = Base.metadata
 
 config.set_main_option("sqlalchemy.url", get_settings().database_url)
 

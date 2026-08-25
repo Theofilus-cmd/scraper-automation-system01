@@ -1,0 +1,19 @@
+<!doctype html>
+<html>
+<head>
+<title>Acme Widget - Blue</title>
+<meta charset="utf-8">
+<style>.price { color: green; }</style>
+<script>console.log("analytics stub -- not JSON-LD, must be ignored by the type selector");</script>
+<script type="application/ld+json">
+{"@context": "https://schema.org/", "@type": "Product", "name": "Acme Widget - Blue", "brand": {"@type": "Brand", "name": "ACME"}, "category": "Home > Widgets", "sku": "WIDGET-BLUE-001", "productID": "10001", "description": "A dependable everyday widget in a calming shade of blue.", "image": "/images/widget-blue.jpg", "offers": {"@type": "Offer", "price": "29.99", "priceCurrency": "USD", "availability": "https://schema.org/InStock"}, "aggregateRating": {"@type": "AggregateRating", "ratingValue": "4.5", "reviewCount": "128"}}
+</script>
+</head>
+<body>
+<h1>Acme Widget - Blue</h1>
+<!-- Deliberately unrelated JSON-LD block below, not @type Product;
+     must be found by the type selector but skipped by the @type filter. -->
+<script type="application/ld+json">{"@context": "https://schema.org/", "@type": "BreadcrumbList", "itemListElement": []}</script>
+<p class="price">$29.99</p>
+</body>
+</html>
