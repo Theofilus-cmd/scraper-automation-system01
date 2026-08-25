@@ -130,7 +130,7 @@ def _json_safe(value: object) -> object:
     """
     if isinstance(value, Decimal):
         return str(value)
-    if isinstance(value, (datetime, date)):
+    if isinstance(value, datetime | date):
         return value.isoformat()
     return value
 
