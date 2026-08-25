@@ -23,7 +23,14 @@ inside the one `async with get_session()` transaction below and commit
 together -- a real Postgres/asyncpg error on any one of them (including
 the bind-type bug this file used to have) aborts the whole purge for this
 cycle rather than leaving it partially applied; the next scheduled run
-retries the same, still-eligible rows.
+retries the same, still-eligible rows. As of fix #3 below, the strict
+ordering is load-bearing in a second way, not just FK-required: the
+`tasks`/`runs` DELETEs' own `NOT EXISTS (SELECT ... FROM observation_history
+...)` guards only produce the right answer because they run, uncommitted,
+*after* the history DELETE directly above them, in this same transaction
+-- each guard is reading the post-history-delete, pre-commit state, which
+is exactly "would any observation_history row left standing still
+reference this task/run."
 
 Every DELETE keeps excluding rows tied to a still-in-flight run
 (`status IN ('pending', 'running')`) -- doc 18 §7.5's "never purge history
@@ -55,6 +62,36 @@ can route around: `Result` and `CursorResult` are genuinely different
 static types, and SQLAlchemy's own maintainers point to `cast()`, not a
 broader ignore, as the fix. `_execute_delete()` below does exactly that,
 once, so none of the three call sites need their own cast or ignore.
+
+Acceptance-review fix #3 (dangling-reference bug, real Postgres): the
+`tasks`/`runs` DELETEs used to decide eligibility from the candidate
+run's own `created_at`/`status` alone, with no check for whether
+`observation_history` still referenced that run/task *after* the history
+DELETE directly above had already run in this same transaction. That is
+unsound whenever a single `run_id`/`task_id` pair is referenced by BOTH
+an old, purge-eligible history row AND a recent, must-be-retained one --
+for instance a task reconciliation redispatched (same `task_id` re-run
+later, doc 18 §7.4) that wrote a second, later history version. The
+first DELETE correctly removes only the old row; the second DELETE then
+tried to delete the still-referenced task anyway, and Postgres correctly
+rejected it: `observation_history_task_id_fkey`/`_run_id_fkey` are
+`ON DELETE RESTRICT` by design (this module's third paragraph, above --
+unchanged, and rightly so; the fix here is to stop attempting a delete
+that FK was always going to refuse, not to weaken it). Fixed by adding
+an `AND NOT EXISTS (SELECT 1 FROM observation_history ...)` guard to
+each of the `tasks`/`runs` DELETEs, checked against `observation_history`
+as it stands *after* the first DELETE already ran -- correct only
+because both remain inside this same transaction, in this same order;
+see the updated child-before-parent paragraph below. `NOT EXISTS`, not
+`NOT IN`: a `NOT IN (subquery)` is unsound the instant the subquery can
+produce a `NULL` (the whole condition becomes unsatisfiable), and while
+today's `observation_history.run_id`/`task_id` are `NOT NULL` and remain
+so, `NOT EXISTS` carries no such precondition to begin with, so it is
+the correct primitive here regardless. The pre-existing
+`observation_history` DELETE's own `run_id NOT IN (SELECT id FROM runs
+WHERE ...)` is untouched: `runs.id` is that subquery's target and a
+primary key, which can never be `NULL`, so that particular `NOT IN` was
+never actually exposed to the unsound case and did not need to change.
 """
 
 from __future__ import annotations
@@ -117,6 +154,9 @@ async def purge_expired_history(*, retention_days: int) -> dict[str, int]:
                 WHERE created_at < now() - make_interval(days => :retention_days)
                   AND status NOT IN ('pending', 'running')
             )
+            AND NOT EXISTS (
+                SELECT 1 FROM observation_history oh WHERE oh.task_id = tasks.id
+            )
             """,
             retention_days,
         )
@@ -126,6 +166,12 @@ async def purge_expired_history(*, retention_days: int) -> dict[str, int]:
             DELETE FROM runs
             WHERE created_at < now() - make_interval(days => :retention_days)
               AND status NOT IN ('pending', 'running')
+              AND NOT EXISTS (
+                  SELECT 1 FROM observation_history oh WHERE oh.run_id = runs.id
+              )
+              AND NOT EXISTS (
+                  SELECT 1 FROM tasks t WHERE t.run_id = runs.id
+              )
             """,
             retention_days,
         )

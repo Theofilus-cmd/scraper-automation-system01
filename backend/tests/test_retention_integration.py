@@ -5,6 +5,22 @@ the immutability trigger's unconditional rejection of ordinary UPDATE/
 DELETE, and confirmation the purge's own narrow bypass never leaks past
 its own transaction.
 
+Acceptance-review fix #3 coverage: `test_purge_retains_task_and_run_while_
+recent_history_still_references_them` below is the dedicated regression
+test for retention.py's own "Acceptance-review fix #3" (see that module's
+docstring) -- a single old, terminal run/task referenced by both an old
+(purge-eligible) and a recent (must-be-retained) observation_history row
+must survive purge_expired_history() with the task and run left standing,
+not an observation_history_task_id_fkey/_run_id_fkey ForeignKeyViolation.
+test_purge_bypass_does_not_leak_past_its_own_transaction below already
+constructs this same old+recent/same-run/same-task shape -- it is left
+otherwise unchanged (it was already correctly testing what its own name
+says) and now additionally passes rather than raising, since the SQL fix
+means purge_expired_history() no longer attempts a DELETE against a task
+still referenced by observation_history. The fully-expired terminal case
+-- parent task/run deleted only once no history remains -- stays covered
+by Scenario 1 of test_purge_removes_only_eligible_rows_in_correct_order.
+
     docker compose exec api pytest -m integration
 """
 
@@ -185,6 +201,50 @@ async def test_purge_bypass_does_not_leak_past_its_own_transaction() -> None:
             await session.commit()
 
     assert await _history_exists(recent_history.id) is True
+
+
+async def test_purge_retains_task_and_run_while_recent_history_still_references_them() -> None:
+    """Acceptance-review fix #3 (retention.py): an old, terminal run/task
+    can be referenced by BOTH an old, purge-eligible history row AND a
+    recent, must-be-retained history row -- e.g. a reconciliation-
+    redispatched task (same task_id re-run later, doc 18 §7.4) whose
+    second attempt wrote a later observation_history version. Before this
+    fix, tasks/runs deletion eligibility was decided purely from the
+    run's own created_at/status, ignoring whether observation_history
+    still referenced it after the history-delete phase already ran in
+    the same transaction -- so purge_expired_history() attempted to
+    DELETE a task the recent row still pointed at and Postgres correctly
+    rejected it: observation_history_task_id_fkey/_run_id_fkey are
+    ON DELETE RESTRICT by design (retention.py's own docstring) -- the FK
+    doing its job, not a bug to route around by weakening it. The real
+    fix is that purge_expired_history() must never attempt that DELETE in
+    the first place whenever any observation_history row -- old or
+    recent -- still references the task/run post-purge.
+    """
+    source = await create_test_source()
+    product = await _create_product(source.id)
+    run = await create_test_run(source.id, status="completed")
+    await _backdate_run_created_at(run.id, days_ago=100)
+    task = await create_test_task(run.id, source.id, status="succeeded")
+    old_history = await _create_history_row(
+        product.id, run.id, task.id, version_created_at=datetime.now(UTC) - timedelta(days=100)
+    )
+    recent_history = await _create_history_row(
+        product.id, run.id, task.id, version_created_at=datetime.now(UTC)
+    )
+
+    result = await purge_expired_history(retention_days=90)  # must not raise
+
+    assert result["observation_history_deleted"] >= 1
+    assert await _history_exists(old_history.id) is False  # the old row is gone
+    assert await _history_exists(recent_history.id) is True  # the recent row survives
+
+    # The task and run must survive too: recent_history still points at
+    # both (observation_history_task_id_fkey / _run_id_fkey, ON DELETE
+    # RESTRICT) -- deleting either here would be a live FK violation, not
+    # a hypothetical one.
+    assert await _task_exists(task.id) is True
+    assert await _run_exists(run.id) is True
 
 
 async def test_immutable_history_rejects_direct_update() -> None:
