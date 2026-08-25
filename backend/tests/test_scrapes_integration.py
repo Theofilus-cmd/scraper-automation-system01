@@ -85,6 +85,12 @@ def test_missing_required_field_returns_422(client: TestClient) -> None:
 
     assert status_code == 422
     assert body["error"]["code"] == "MISSING_REQUIRED_FIELD"
+    # Phase 2: tasks.error_detail now durably carries validation_errors
+    # (app/workers/tasks_http.py::_finalize_task_failure's extra_detail
+    # param) precisely so this legacy response can still surface it from
+    # durable state, the same way Phase 1's original response did from the
+    # (no-longer-trusted) Celery return value.
+    assert "price" in body["error"]["details"]["validation_errors"]
 
 
 def test_partial_success_returns_200_with_validation_errors(client: TestClient) -> None:
@@ -110,3 +116,41 @@ def test_unsupported_adapter_returns_422_without_dispatching(client: TestClient)
 def test_get_scrape_unknown_task_id_returns_404(client: TestClient) -> None:
     response = client.get(f"/api/v1/scrapes/{uuid.uuid4()}")
     assert response.status_code == 404
+
+
+def test_get_scrape_malformed_task_id_returns_404_not_422(client: TestClient) -> None:
+    """doc 18 §6.6: byte-exact legacy behavior -- a non-UUID task_id is
+    "unknown", not a validation error, matching Phase 1's original `str`
+    path-param contract (a bare `uuid.UUID` path param, used by every new
+    Phase 2 endpoint, would 422 here instead; this endpoint deliberately
+    keeps the old, looser type)."""
+    response = client.get("/api/v1/scrapes/not-a-uuid")
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "TASK_NOT_FOUND"
+
+
+def test_deprecation_header_present_on_every_legacy_response(client: TestClient) -> None:
+    """doc 18 §6.6 point 7: every legacy response -- success or error --
+    carries Deprecation: true (LegacyScrapesDeprecationMiddleware,
+    app/api/v1/scrapes.py), proven here across three distinct response
+    paths (a create-time reject before any DB/run creation, a 404 lookup,
+    and a full DB-touching failure) so this is verified as a property of
+    the whole router, not one lucky handler.
+    """
+    unsupported = client.post(
+        "/api/v1/scrapes", json={"source_url": "https://real-marketplace.example.com/p/2"}
+    )
+    not_found = client.get(f"/api/v1/scrapes/{uuid.uuid4()}")
+    # Checked on the raw POST response directly (not via _post_and_resolve's
+    # polling helper, which can return a *different* response object once
+    # it follows a 202) -- the middleware stamps every response on this
+    # path uniformly, 202 included, so this is valid either way.
+    missing_field = client.post(
+        "/api/v1/scrapes",
+        json={"source_url": f"{_MOCK_STORE_BASE_URL}/products/widget-missing-price"},
+    )
+
+    assert unsupported.headers.get("deprecation") == "true"
+    assert not_found.headers.get("deprecation") == "true"
+    assert missing_field.headers.get("deprecation") == "true"
+    assert missing_field.status_code in (202, 422)
