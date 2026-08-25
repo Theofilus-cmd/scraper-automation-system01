@@ -34,24 +34,40 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.models.base import Base
 
+# doc 18 §3.1's source lifecycle -- kept here (not in lifecycle.py) since it
+# lives directly on the Source model this file already owns.
+SOURCE_STATUSES = ("active", "paused", "archived")
+
 
 class Source(Base):
     """One scrape target's origin site -- deliberately simpler than doc 05
     §4's `targets`: no project/workspace/schedule (Phase 1 has none of
     those).
+
+    `status` (doc 18 §2.1, migration `0003`) is the only Phase 2 addition to
+    this table. Note `normalized_url` is UNIQUE only among non-archived rows
+    as of migration `0003` (`uq_sources_normalized_url_active`, a partial
+    index) -- the plain `unique=True` below still documents intent at the
+    ORM/Python level (SQLAlchemy does not model partial uniqueness through
+    a `Mapped[]` flag), but the actual DB-level constraint enforcing it is
+    the partial index, not this column flag. See migration 0003's docstring
+    for why: an archived source and a freshly-created one may legitimately
+    share a normalized_url (doc 18 §6.1's re-add-after-archive behavior).
     """
 
     __tablename__ = "sources"
     __table_args__ = (
         CheckConstraint("adapter_type IN ('mock_store')", name="ck_sources_adapter_type"),
+        CheckConstraint(f"status IN {SOURCE_STATUSES!r}", name="ck_sources_status"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
     )
     url: Mapped[str] = mapped_column(Text, nullable=False)
-    normalized_url: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    normalized_url: Mapped[str] = mapped_column(Text, nullable=False)
     adapter_type: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False, server_default="active")
     created_at: Mapped[datetime] = mapped_column(nullable=False, server_default=text("now()"))
     updated_at: Mapped[datetime] = mapped_column(nullable=False, server_default=text("now()"))
 
