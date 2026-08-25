@@ -29,8 +29,9 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal
+from typing import cast
 
-from sqlalchemy import select, text
+from sqlalchemy import Table, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -98,7 +99,12 @@ async def _upsert_product(
     identity before either reaches the observation-history diff below --
     see `_diff_against_prior_observation`'s docstring.
     """
-    table = Product.__table__
+    # DeclarativeBase.__table__ is typed FromClause, not Table, in
+    # SQLAlchemy's own stubs (upstream: sqlalchemy/sqlalchemy#9130, closed
+    # as "expected behavior" -- their own suggested fix is an explicit
+    # cast at the call site). pg_insert() needs a real Table; the cast
+    # documents exactly that gap instead of silencing it.
+    table = cast(Table, Product.__table__)
     values = {
         "source_id": source_id,
         "product_identity_key": identity_key,
@@ -193,7 +199,7 @@ async def _upsert_current_observation(
     validation: ValidationResult,
     scraped_at: datetime,
 ) -> None:
-    table = CurrentObservation.__table__
+    table = cast(Table, CurrentObservation.__table__)  # see _upsert_product's cast, same reason
     values: dict[str, object] = {
         **new_values,
         "product_id": product_id,

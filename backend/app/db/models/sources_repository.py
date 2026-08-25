@@ -15,8 +15,9 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime, timedelta
+from typing import cast
 
-from sqlalchemy import select
+from sqlalchemy import Table, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -81,7 +82,13 @@ async def create_or_get_source(
     if existing is not None:
         return existing, False
 
-    table = Source.__table__
+    # DeclarativeBase.__table__ is typed as the more abstract FromClause,
+    # not Table, in SQLAlchemy's own stubs (upstream:
+    # sqlalchemy/sqlalchemy#9130, closed as "expected behavior" -- the
+    # maintainers' own suggested resolution is an explicit cast at the call
+    # site, not a library change) -- pg_insert() needs a real Table. The
+    # cast documents exactly that gap rather than silencing it.
+    table = cast(Table, Source.__table__)
     stmt = (
         pg_insert(table)
         .values(url=url, normalized_url=normalized, adapter_type=adapter_slug, status="active")
