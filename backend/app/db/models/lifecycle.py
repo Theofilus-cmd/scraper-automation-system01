@@ -40,6 +40,11 @@ RUN_IN_FLIGHT_STATUSES = ("pending", "running")
 RUN_TRIGGERED_BY = ("schedule", "manual")
 
 TASK_STATUSES = ("queued", "in_progress", "succeeded", "failed", "retrying", "dead_letter")
+# Added alongside the API layer (commit 4): the three TASK_STATUSES values
+# a task never leaves once reached -- app/api/v1/scrapes.py's legacy poll
+# loop (doc 18 §6.6) and any future caller need this same terminal/pending
+# split, so it's defined once here rather than re-hardcoded per caller.
+TASK_TERMINAL_STATUSES = ("succeeded", "failed", "dead_letter")
 TASK_TRANSIENT_REASONS = ("timeout", "network_error")  # doc 18 §5.1 -- retryable
 TASK_PERMANENT_REASONS = (
     "missing_required_field",

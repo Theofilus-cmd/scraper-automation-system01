@@ -180,15 +180,31 @@ async def _finalize_task_success(task_id: uuid.UUID, run_id: uuid.UUID) -> None:
 
 
 async def _finalize_task_failure(
-    task_id: uuid.UUID, run_id: uuid.UUID, *, reason: str, message: str
+    task_id: uuid.UUID,
+    run_id: uuid.UUID,
+    *,
+    reason: str,
+    message: str,
+    extra_detail: dict[str, Any] | None = None,
 ) -> None:
+    """`extra_detail` (added alongside the API layer, commit 4): merged
+    into `error_detail` beyond the plain `{"message": ...}` shape --
+    `missing_required_field`'s caller below is the one case that needs
+    this today (`validation_errors`), so that the legacy alias
+    (app/api/v1/scrapes.py, doc 18 §6.6) can surface it from durable state
+    the same way Phase 1's original response did, instead of only from the
+    Celery return value this design deliberately stops trusting.
+    """
+    detail: dict[str, Any] = {"message": message}
+    if extra_detail:
+        detail.update(extra_detail)
     await _finalize_task(
         task_id,
         run_id,
         task_status="failed",
         run_status="failed",
         error_reason=reason,
-        error_detail={"message": message},
+        error_detail=detail,
     )
 
 
@@ -277,6 +293,7 @@ async def _scrape_source_url_for_task(task_id: uuid.UUID, *, attempt: int) -> di
             context.run_id,
             reason="missing_required_field",
             message="required field(s) missing or invalid",
+            extra_detail={"validation_errors": result.validation_errors},
         )
         return {
             "status": "failed",

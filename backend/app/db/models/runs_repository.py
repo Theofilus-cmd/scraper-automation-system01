@@ -306,6 +306,20 @@ async def reconciliation_sweep(*, stuck_after: timedelta) -> dict[str, int]:
     return {"requeued_tasks": len(requeued_task_ids), "healed_runs": len(healed_tasks)}
 
 
+async def first_task_id_for_run(run_id: uuid.UUID) -> uuid.UUID | None:
+    """Added alongside the API layer (commit 4): resolves a run's one task
+    id without the caller needing its own open session -- used wherever a
+    caller has a `Run` but not (yet) its `Task`: an idempotency-key replay
+    (§4.4) or the legacy alias attaching to an already-in-flight run
+    (§6.6), both in app/api/v1/. Returns `None` only in the narrow window
+    where phase A (§4.1) has committed but phase B hasn't yet -- callers
+    that can wait poll again rather than treating that as an error.
+    """
+    async with get_session() as session:
+        tasks = await list_run_tasks(session, run_id)
+    return tasks[0].id if tasks else None
+
+
 async def get_run(session: AsyncSession, run_id: uuid.UUID) -> Run | None:
     result: Run | None = (
         await session.execute(select(Run).where(Run.id == run_id))

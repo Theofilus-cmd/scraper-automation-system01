@@ -130,6 +130,10 @@ services:
       # network call) runs in the API process, so it needs this too, even
       # though the API never calls mock-store directly.
       MOCK_STORE_BASE_URL: ${MOCK_STORE_BASE_URL:-http://mock-store:4000}
+      # doc 18 §7.3: the production deployment guard -- create_app() (this
+      # process) refuses to start at all if ENVIRONMENT=production and this
+      # isn't explicitly true.
+      UNAUTHENTICATED_SOURCE_API_ACK: ${UNAUTHENTICATED_SOURCE_API_ACK:-false}
     ports:
       - "8000:8000"
     depends_on:
@@ -175,6 +179,17 @@ services:
       DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://scraper:change-me-locally@pgbouncer:6432/scraper}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       SCHEDULER_HEARTBEAT_INTERVAL_SECONDS: ${SCHEDULER_HEARTBEAT_INTERVAL_SECONDS:-15}
+      # doc 18 §4.1: the real claim-and-dispatch poll loop, distinct from
+      # the heartbeat above -- both run concurrently in this process.
+      SCHEDULER_CLAIM_INTERVAL_SECONDS: ${SCHEDULER_CLAIM_INTERVAL_SECONDS:-10}
+      SCHEDULER_CLAIM_BATCH_SIZE: ${SCHEDULER_CLAIM_BATCH_SIZE:-20}
+      # doc 18 §1.1 / doc 07 §5: the reconciliation sweep, reused directly.
+      RECONCILIATION_INTERVAL_SECONDS: ${RECONCILIATION_INTERVAL_SECONDS:-120}
+      RECONCILIATION_STUCK_TASK_TIMEOUT_MINUTES: ${RECONCILIATION_STUCK_TASK_TIMEOUT_MINUTES:-10}
+      # doc 18 §7.5: the hourly retention-purge check, added to this same
+      # process rather than a separate service.
+      HISTORY_RETENTION_DAYS: ${HISTORY_RETENTION_DAYS:-90}
+      RETENTION_PURGE_INTERVAL_SECONDS: ${RETENTION_PURGE_INTERVAL_SECONDS:-3600}
     depends_on:
       migrate:
         condition: service_completed_successfully
