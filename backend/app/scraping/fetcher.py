@@ -47,11 +47,32 @@ class FetchError(Exception):
     """Raised for any fetch failure doc 05 §5's `tasks.error_reason` has a
     name for. `reason` is one of that column's values, e.g.
     "dns_or_ssrf_blocked", "timeout", "network_error".
+
+    `retry_after` (doc 18 §5.3, Phase 2): populated only for a 429/503
+    response that carried a `Retry-After` header in the (far more common)
+    delay-in-seconds form -- the HTTP-date form is deliberately not parsed
+    here (flagged, not silently mishandled: a date-form header just leaves
+    this `None`, and the caller falls back to Celery's own backoff+jitter,
+    which is always a safe, correct default). `None` for every other
+    reason/response shape, including a 429/503 with no such header.
     """
 
-    def __init__(self, reason: str, message: str) -> None:
+    def __init__(self, reason: str, message: str, *, retry_after: float | None = None) -> None:
         self.reason = reason
+        self.retry_after = retry_after
         super().__init__(message)
+
+
+def _parse_retry_after_seconds(header_value: str | None) -> float | None:
+    if not header_value:
+        return None
+    try:
+        seconds = float(header_value.strip())
+    except ValueError:
+        # HTTP-date form (e.g. "Wed, 21 Oct 2026 07:28:00 GMT") -- not
+        # parsed here, see FetchError's docstring.
+        return None
+    return seconds if seconds >= 0 else None
 
 
 def _is_blocked_address(ip: str) -> bool:
@@ -98,6 +119,25 @@ def _check_url_allowed(url: str) -> None:
             )
 
 
+def validate_source_url(url: str) -> None:
+    """Create-time SSRF check (doc 18 §7.1, Phase 2) -- a synchronous
+    fast-fail for `POST /sources`, reusing this exact same validation logic
+    rather than a separate, parallel implementation that could drift out of
+    sync with it. Raises `FetchError` on rejection, same as a real fetch
+    would.
+
+    Explicitly a UX/data-quality improvement layered on top of the real
+    security boundary, NOT a replacement for it: DNS can change between
+    create-time and fetch-time (DNS rebinding), which is exactly why
+    `_check_url_allowed` above still runs, unmodified, on every actual
+    fetch and every redirect hop -- that check, not this one, is what
+    actually protects the network. This function only ever runs the
+    single-URL check (no redirect loop -- there's nothing to redirect yet,
+    the source hasn't been fetched).
+    """
+    _check_url_allowed(url)
+
+
 async def fetch(url: str, *, transport: httpx.AsyncBaseTransport | None = None) -> RawPage:
     """Fetch `url`, following redirects manually (one hop at a time, each
     re-validated) up to `MAX_REDIRECTS`. `transport` is a testability hook
@@ -135,10 +175,14 @@ async def fetch(url: str, *, transport: httpx.AsyncBaseTransport | None = None) 
                 current_url = urljoin(current_url, location)
                 continue
 
-            if response.status_code >= 500 or response.status_code in (429, 503):
+            if response.status_code in (429, 503):
                 raise FetchError(
-                    "network_error", f"server returned {response.status_code}"
+                    "network_error",
+                    f"server returned {response.status_code}",
+                    retry_after=_parse_retry_after_seconds(response.headers.get("retry-after")),
                 )
+            if response.status_code >= 500:
+                raise FetchError("network_error", f"server returned {response.status_code}")
 
             return RawPage(
                 html=response.text,

@@ -33,6 +33,31 @@ class Settings(BaseSettings):
 
     scheduler_heartbeat_interval_seconds: int = 15
 
+    # --- Phase 2 (doc 18) -------------------------------------------------
+    # §4.1: the scheduler's real claim-and-dispatch poll loop, distinct
+    # from the (unchanged) heartbeat above -- both run concurrently in the
+    # scheduler process, see app/scheduler/main.py.
+    scheduler_claim_interval_seconds: int = 10
+    scheduler_claim_batch_size: int = 20
+
+    # §1.1/doc 07 §5: the reconciliation sweep, reused directly. Doc 07 §5's
+    # own shipped defaults ("every 2 minutes", "stuck past 10 minutes").
+    reconciliation_interval_seconds: int = 120
+    reconciliation_stuck_task_timeout_minutes: int = 10
+
+    # §7.5: retention purge. HISTORY_RETENTION_DAYS' default of 90 is the
+    # literal value amendment 6 specified; the run cadence (hourly) is a
+    # judgment call doc 18 leaves to implementation -- distinct from the
+    # ~10s claim-poll cadence since a DELETE sweep doesn't need to run
+    # every poll tick.
+    history_retention_days: int = 90
+    retention_purge_interval_seconds: int = 3600
+
+    # §7.3: the production deployment guard. Requires an explicit,
+    # separately-named opt-in before the unauthenticated source/run/product
+    # routers mount when environment=="production" -- see app/main.py.
+    unauthenticated_source_api_ack: bool = False
+
     # Phase 1 (doc 17): Compose-internal address of the mock-store service
     # -- the fetcher/adapter run inside worker-http's container, which has
     # no localhost:4000, so this must stay a Compose service name, not a
