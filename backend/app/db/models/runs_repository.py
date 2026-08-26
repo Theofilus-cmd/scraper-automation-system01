@@ -203,15 +203,14 @@ async def claim_due_schedules(*, batch_size: int) -> int:
                 status="pending",
                 triggered_by="schedule",
             )
-            session.add(run)
             try:
-                # A per-row SAVEPOINT: a lost race on ONE row must not
-                # abort the whole batch, and must not release the FOR
-                # UPDATE locks this transaction still holds on the OTHER
-                # claimed schedule rows (a plain per-row commit would do
-                # exactly that -- releasing every lock this transaction
-                # holds, not just the failing row's).
+                # A per-row SAVEPOINT: add and flush the row only after the
+                # SAVEPOINT is open. `begin_nested()` autoflushes existing
+                # pending rows before opening its savepoint, so adding
+                # `run` earlier would allow a lost unique-index race to
+                # poison the outer transaction instead of this savepoint.
                 async with session.begin_nested():
+                    session.add(run)
                     await session.flush()
             except IntegrityError:
                 # Realistic cause: a manual/legacy trigger raced this exact
