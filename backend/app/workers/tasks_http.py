@@ -50,6 +50,13 @@ from app.scraping.normalize import normalize
 from app.scraping.types import ExtractionSchema, FetchContext
 from app.workers.async_bridge import run_async
 from app.workers.celery_app import typed_bound_task, typed_task
+from app.workers.coordination import (
+    CoordinationUnavailableError,
+    TaskExecutionRedisClient,
+    acquire_task_execution_lease,
+    get_task_execution_redis_client,
+    release_task_execution_lease,
+)
 
 logger = get_logger(__name__)
 
@@ -310,6 +317,60 @@ async def _scrape_source_url_for_task(task_id: uuid.UUID, *, attempt: int) -> di
     }
 
 
+async def _scrape_source_url_for_task_with_lease(
+    task_id: uuid.UUID, *, attempt: int
+) -> dict[str, Any]:
+    """Run one scrape attempt while holding a token-safe Redis execution lease.
+
+    Redis provides best-effort concurrent-execution coordination only. The
+    lease is released after every normal attempt; its TTL is crash recovery
+    fallback. A task that outlives its TTL can still be redelivered, so
+    durable task/persistence state remains authoritative for outcomes.
+    """
+    try:
+        client: TaskExecutionRedisClient = get_task_execution_redis_client()
+    except Exception as exc:
+        logger.exception(
+            "task execution coordination client unavailable",
+            extra={"task_id": str(task_id), "queue": "http"},
+        )
+        raise CoordinationUnavailableError("could not create task execution Redis client") from exc
+
+    lease = None
+    try:
+        lease = await acquire_task_execution_lease(task_id, client=client)
+
+        if lease is None:
+            logger.info(
+                "task execution lease unavailable",
+                extra={"task_id": str(task_id), "queue": "http"},
+            )
+            return {"status": "duplicate_execution"}
+
+        return await _scrape_source_url_for_task(task_id, attempt=attempt)
+    finally:
+        if lease is not None:
+            try:
+                released = await release_task_execution_lease(lease, client=client)
+                if not released:
+                    logger.warning(
+                        "task execution lease was no longer owned at release",
+                        extra={"task_id": str(task_id), "queue": "http"},
+                    )
+            except CoordinationUnavailableError:
+                logger.exception(
+                    "task execution lease release failed",
+                    extra={"task_id": str(task_id), "queue": "http"},
+                )
+        try:
+            await client.aclose()
+        except Exception:
+            logger.exception(
+                "task execution Redis client close failed",
+                extra={"task_id": str(task_id), "queue": "http"},
+            )
+
+
 @typed_bound_task(
     name="app.workers.tasks_http.scrape_source_url",
     bind=True,
@@ -332,7 +393,9 @@ def scrape_source_url(self: CeleryTask, task_id: str) -> dict[str, Any]:
     )
 
     try:
-        result: dict[str, Any] = run_async(_scrape_source_url_for_task(task_uuid, attempt=attempt))
+        result: dict[str, Any] = run_async(
+            _scrape_source_url_for_task_with_lease(task_uuid, attempt=attempt)
+        )
     except TransientScrapeError as exc:
         run_async(_mark_task_retrying(task_uuid, reason=exc.reason, message=str(exc)))
         try:
