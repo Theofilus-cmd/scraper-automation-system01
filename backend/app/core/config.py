@@ -58,6 +58,15 @@ class Settings(BaseSettings):
     # routers mount when environment=="production" -- see app/main.py.
     unauthenticated_source_api_ack: bool = False
 
+    # --- Phase 3 (doc 19) ---------------------------------------------
+    # Task idempotency and per-domain politeness defaults. The worker
+    # coordination layer consumes these values; declaring them here alone
+    # does not change scraper behavior.
+    task_idempotency_ttl_seconds: int = 600
+    domain_max_concurrency: int = 3
+    domain_rate_limit_seconds: int = 2
+    domain_cooldown_seconds: int = 600
+
     # Phase 1 (doc 17): Compose-internal address of the mock-store service
     # -- the fetcher/adapter run inside worker-http's container, which has
     # no localhost:4000, so this must stay a Compose service name, not a
