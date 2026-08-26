@@ -59,10 +59,10 @@ class Settings(BaseSettings):
     unauthenticated_source_api_ack: bool = False
 
     # --- Phase 3 (doc 19) ---------------------------------------------
-    # Task idempotency and per-domain politeness defaults. The worker
+    # Task execution lease and per-domain politeness defaults. The worker
     # coordination layer consumes these values; declaring them here alone
     # does not change scraper behavior.
-    task_idempotency_ttl_seconds: int = 600
+    task_execution_lease_seconds: int = 60
     domain_max_concurrency: int = 3
     domain_rate_limit_seconds: int = 2
     domain_cooldown_seconds: int = 600
