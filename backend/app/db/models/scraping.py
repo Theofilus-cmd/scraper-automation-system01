@@ -23,12 +23,17 @@ than being duplicated onto `current_observations`.
 """
 
 from __future__ import annotations
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from app.db.models.identity import Workspace
 
 import uuid
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import CHAR, CheckConstraint, ForeignKey, Numeric, Text, UniqueConstraint, text
+from sqlalchemy import CHAR, CheckConstraint, ForeignKey, Index, Numeric, Text, UniqueConstraint, text
+
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -60,17 +65,24 @@ class Source(Base):
         CheckConstraint("adapter_type IN ('mock_store')", name="ck_sources_adapter_type"),
         CheckConstraint(f"status IN {SOURCE_STATUSES!r}", name="ck_sources_status"),
     )
+    Index("ix_sources_workspace_id", "workspace_id"),
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, server_default=text("gen_random_uuid()")
     )
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("workspaces.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
     url: Mapped[str] = mapped_column(Text, nullable=False)
+
     normalized_url: Mapped[str] = mapped_column(Text, nullable=False)
     adapter_type: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default="active")
     created_at: Mapped[datetime] = mapped_column(nullable=False, server_default=text("now()"))
     updated_at: Mapped[datetime] = mapped_column(nullable=False, server_default=text("now()"))
-
+    workspace: Mapped["Workspace"] = relationship(back_populates="sources")
     products: Mapped[list[Product]] = relationship(back_populates="source")
 
 

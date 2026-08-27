@@ -126,6 +126,9 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://scraper:change-me-locally@pgbouncer:6432/scraper}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?JWT_SECRET_KEY must be set}
+      JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
+      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-30}
       # Phase 1 (doc 17): registry.detect()'s hostname check (pure, no
       # network call) runs in the API process, so it needs this too, even
       # though the API never calls mock-store directly.

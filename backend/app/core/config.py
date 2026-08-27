@@ -58,6 +58,15 @@ class Settings(BaseSettings):
     # routers mount when environment=="production" -- see app/main.py.
     unauthenticated_source_api_ack: bool = False
 
+    # --- Authentication ------------------------------------------------
+    # JWT_SECRET_KEY must be supplied through the environment. The empty
+    # default intentionally makes an incorrectly configured deployment fail
+    # when auth is first used instead of silently signing tokens with a
+    # predictable development secret.
+    jwt_secret_key: str = ""
+    jwt_algorithm: str = "HS256"
+    access_token_expire_minutes: int = 30
+
     # --- Phase 3 (doc 19) ---------------------------------------------
     # Task execution lease and per-domain politeness defaults. The worker
     # coordination layer consumes these values; declaring them here alone

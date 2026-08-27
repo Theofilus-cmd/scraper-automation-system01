@@ -1,17 +1,4 @@
-"""Shared test-data factories -- create durable sources/runs/tasks directly
-against a real Postgres, bypassing the API/Celery-dispatch layers, for
-tests that need a real row to attach to (a foreign key, an idempotency
-check, a direct call to upsert_scrape_result()/scrape_source_url())
-without either going through HTTP or waiting on a live Celery broker round
-trip.
-
-Every function opens and commits its own session/transaction (matching the
-convention every repository module in app/db/models/ already uses), and
-every one is safe to call from multiple `@pytest.mark.integration` tests
-concurrently -- URLs/idempotency keys are always uuid4-suffixed so no two
-calls, even within the same test run, ever collide on a real unique
-constraint.
-"""
+"""Shared durable test-data factories for integration tests."""
 
 from __future__ import annotations
 
@@ -20,35 +7,93 @@ from datetime import UTC, datetime
 
 from sqlalchemy import select
 
+from app.core.security import hash_password
+from app.db.models.identity import User, Workspace, WorkspaceMember
 from app.db.models.lifecycle import Run, Task
 from app.db.models.scraping import Source
 from app.db.models.sources_repository import create_or_get_source
 from app.db.session import get_session
 
 MOCK_STORE_BASE_URL = "http://mock-store:4000"
+TEST_USER_EMAIL = "integration-tests@example.test"
+TEST_USER_PASSWORD = "integration-tests-password"
+TEST_WORKSPACE_SLUG = "integration-tests"
 
 
 def unique_source_url() -> str:
     return f"{MOCK_STORE_BASE_URL}/products/test-{uuid.uuid4().hex}"
 
 
-async def create_test_source(*, url: str | None = None, status: str = "active") -> Source:
-    """Creates a real `sources` row via the same `create_or_get_source()`
-    path the API uses, so the create-time SSRF check (doc 18 §7.1) and the
-    `normalized_url` partial-unique-index behavior (migration 0003) are
-    exercised the same way here as in production. `url` always resolves to
-    `mock-store` (the one SSRF-allowlisted host,
-    app/core/config.py::ssrf_allowed_hosts) unless the caller passes a
-    specific one, so this never needs network mocking.
+async def get_or_create_test_workspace() -> Workspace:
+    """Return the shared user-owned integration-test workspace."""
+    async with get_session() as session:
+        user = (
+            await session.execute(select(User).where(User.email == TEST_USER_EMAIL))
+        ).scalar_one_or_none()
 
-    `status` is applied as a direct post-create update when it isn't
-    `"active"` -- `create_or_get_source()` itself only ever creates
-    `active` rows (doc 18 §6.1); archiving/pausing are separate,
-    deliberate operations, not a create-time parameter.
-    """
+        if user is None:
+            user = User(
+                email=TEST_USER_EMAIL,
+                password_hash=hash_password(TEST_USER_PASSWORD),
+                display_name="Integration Test User",
+                is_active=True,
+                is_verified=True,
+            )
+            session.add(user)
+            await session.flush()
+
+        workspace = (
+            await session.execute(
+                select(Workspace).where(Workspace.slug == TEST_WORKSPACE_SLUG)
+            )
+        ).scalar_one_or_none()
+
+        if workspace is None:
+            workspace = Workspace(
+                name="Integration Tests",
+                slug=TEST_WORKSPACE_SLUG,
+                owner_user_id=user.id,
+            )
+            session.add(workspace)
+            await session.flush()
+
+        membership = (
+            await session.execute(
+                select(WorkspaceMember).where(
+                    WorkspaceMember.workspace_id == workspace.id,
+                    WorkspaceMember.user_id == user.id,
+                )
+            )
+        ).scalar_one_or_none()
+
+        if membership is None:
+            session.add(
+                WorkspaceMember(
+                    workspace_id=workspace.id,
+                    user_id=user.id,
+                    role="owner",
+                )
+            )
+
+        await session.commit()
+        await session.refresh(workspace)
+        return workspace
+
+
+async def create_test_source(
+    *,
+    url: str | None = None,
+    status: str = "active",
+) -> Source:
+    """Create a source in the shared integration-test workspace."""
+    workspace = await get_or_create_test_workspace()
+
     async with get_session() as session:
         source, _created = await create_or_get_source(
-            session, url=url or unique_source_url(), adapter_slug="mock_store"
+            session,
+            workspace_id=workspace.id,
+            url=url or unique_source_url(),
+            adapter_slug="mock_store",
         )
         if status != "active":
             source.status = status
@@ -64,14 +109,7 @@ async def create_test_run(
     schedule_id: uuid.UUID | None = None,
     client_idempotency_key: str | None = None,
 ) -> Run:
-    """Inserts a `runs` row directly -- bypasses
-    `runs_repository.create_manual_run()`'s no-overlap pre-check/collision
-    handling and Celery dispatch entirely, for tests that need to seed a
-    specific run shape directly rather than drive it through the full
-    trigger pipeline. Tests that exercise the no-overlap invariant itself
-    call `create_manual_run()` (or a raw `INSERT`) directly instead of
-    this factory.
-    """
+    """Insert a run directly for test setup."""
     async with get_session() as session:
         run = Run(
             source_id=source_id,
@@ -93,12 +131,16 @@ async def create_test_task(
     idempotency_key: str | None = None,
     queued_at: datetime | None = None,
 ) -> Task:
+    """Insert a task directly for test setup."""
     async with get_session() as session:
         task = Task(
             run_id=run_id,
             source_id=source_id,
             status=status,
-            idempotency_key=idempotency_key or f"{run_id}:{source_id}:{uuid.uuid4().hex}",
+            idempotency_key=(
+                idempotency_key
+                or f"{run_id}:{source_id}:{uuid.uuid4().hex}"
+            ),
             queued_at=queued_at if queued_at is not None else datetime.now(UTC),
         )
         session.add(task)
@@ -112,10 +154,7 @@ async def create_source_run_task(
     run_status: str = "running",
     task_status: str = "queued",
 ) -> tuple[Source, Run, Task]:
-    """The common case: a fresh source with one run and one task, ready to
-    pass straight into `upsert_scrape_result()` or
-    `scrape_source_url(str(task.id))`.
-    """
+    """Create one source, run, and task for an integration-test scenario."""
     source = await create_test_source(status=source_status)
     run = await create_test_run(source.id, status=run_status)
     task = await create_test_task(run.id, source.id, status=task_status)
@@ -129,34 +168,19 @@ async def finalize_run_and_task(
     run_status: str = "completed",
     task_status: str = "succeeded",
 ) -> None:
-    """Directly transitions a run+task to a terminal state -- mirrors what
-    app/workers/tasks_http.py's own `_finalize_task()` /
-    `_finalize_task_success()` / `_finalize_task_failure()` do in
-    production once a real scrape genuinely finishes, without importing
-    that module's private functions into tests that deliberately exercise
-    `upsert_scrape_result()` in isolation from it -- that function never
-    touches run/task status at all (see repository.py's own module
-    docstring), so nothing else in this test suite does it on its behalf.
-
-    Needed before a test can create a SECOND run for the same source:
-    `uq_runs_one_in_flight_per_source` (migration 0003) rejects any second
-    row with `status IN ('pending', 'running')` for one `source_id` -- a
-    run left sitting at `create_test_run()`'s `'running'` default forever
-    would make a second scrape *event* for that source impossible to set
-    up at all, exactly as it genuinely would be in production, where a
-    second run cannot be created until the first really finishes (doc 18
-    §4.4). Call this on the prior run/task before creating the next one,
-    rather than picking a status for the new row that merely happens not
-    to collide with the partial unique index's `WHERE` clause -- that
-    would leave the prior run permanently, unrealistically stuck at
-    `'running'` even though its scrape genuinely succeeded.
-    """
+    """Transition a test run and task into terminal states."""
     async with get_session() as session:
-        run = (await session.execute(select(Run).where(Run.id == run_id))).scalar_one()
-        task = (await session.execute(select(Task).where(Task.id == task_id))).scalar_one()
+        run = (
+            await session.execute(select(Run).where(Run.id == run_id))
+        ).scalar_one()
+        task = (
+            await session.execute(select(Task).where(Task.id == task_id))
+        ).scalar_one()
+
         now = datetime.now(UTC)
         run.status = run_status
         run.finished_at = now
         task.status = task_status
         task.finished_at = now
+
         await session.commit()

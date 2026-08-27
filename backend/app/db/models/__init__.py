@@ -9,3 +9,5 @@ from app.db.models.base import Base
 from app.db.models.scraping import CurrentObservation, Product, Source
 
 __all__ = ["Base", "CurrentObservation", "Product", "Source"]
+
+from app.db.models.identity import User, Workspace, WorkspaceMember
