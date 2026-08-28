@@ -53,11 +53,6 @@ class Settings(BaseSettings):
     history_retention_days: int = 90
     retention_purge_interval_seconds: int = 3600
 
-    # §7.3: the production deployment guard. Requires an explicit,
-    # separately-named opt-in before the unauthenticated source/run/product
-    # routers mount when environment=="production" -- see app/main.py.
-    unauthenticated_source_api_ack: bool = False
-
     # --- Authentication ------------------------------------------------
     # JWT_SECRET_KEY must be supplied through the environment. The empty
     # default intentionally makes an incorrectly configured deployment fail

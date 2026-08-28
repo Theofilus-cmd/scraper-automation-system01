@@ -133,10 +133,7 @@ services:
       # network call) runs in the API process, so it needs this too, even
       # though the API never calls mock-store directly.
       MOCK_STORE_BASE_URL: ${MOCK_STORE_BASE_URL:-http://mock-store:4000}
-      # doc 18 §7.3: the production deployment guard -- create_app() (this
-      # process) refuses to start at all if ENVIRONMENT=production and this
-      # isn't explicitly true.
-      UNAUTHENTICATED_SOURCE_API_ACK: ${UNAUTHENTICATED_SOURCE_API_ACK:-false}
+
     ports:
       - "8000:8000"
     depends_on:
