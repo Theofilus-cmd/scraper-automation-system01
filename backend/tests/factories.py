@@ -79,7 +79,50 @@ async def get_or_create_test_workspace() -> Workspace:
         await session.refresh(workspace)
         return workspace
 
+async def create_isolated_workspace_source() -> tuple[Workspace, Source]:
+    """Create a source owned by a separate user/workspace for isolation tests."""
+    suffix = uuid.uuid4().hex
+    email = f"workspace-isolation-{suffix}@example.test"
+    slug = f"workspace-isolation-{suffix}"
 
+    async with get_session() as session:
+        user = User(
+            email=email,
+            password_hash=hash_password("workspace-isolation-password"),
+            display_name="Workspace Isolation User",
+            is_active=True,
+            is_verified=True,
+        )
+        session.add(user)
+        await session.flush()
+
+        workspace = Workspace(
+            name=f"Workspace Isolation {suffix}",
+            slug=slug,
+            owner_user_id=user.id,
+        )
+        session.add(workspace)
+        await session.flush()
+
+        session.add(
+            WorkspaceMember(
+                workspace_id=workspace.id,
+                user_id=user.id,
+                role="owner",
+            )
+        )
+
+        await session.commit()
+        await session.refresh(workspace)
+
+    async with get_session() as session:
+        source, _created = await create_or_get_source(
+            session,
+            workspace_id=workspace.id,
+            url=unique_source_url(),
+            adapter_slug="mock_store",
+        )
+        return workspace, source
 async def create_test_source(
     *,
     url: str | None = None,

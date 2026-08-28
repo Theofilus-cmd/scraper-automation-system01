@@ -27,8 +27,13 @@ from app.db.models.repository import upsert_scrape_result
 from app.db.models.scraping import Source
 from app.scraping.types import NormalizedRecord, ValidationResult
 from app.workers.async_bridge import run_async
-from tests.factories import create_test_run, create_test_source, create_test_task
 
+from tests.factories import (
+    create_isolated_workspace_source,
+    create_test_run,
+    create_test_source,
+    create_test_task,
+)
 pytestmark = pytest.mark.integration
 
 
@@ -297,3 +302,58 @@ def test_get_product_history_unknown_product_id_returns_404(client: TestClient) 
 
     assert response.status_code == 404
     assert response.json()["error"]["code"] == "PRODUCT_NOT_FOUND"
+def test_workspace_cannot_read_other_workspace_runs_or_products(
+    client: TestClient,
+) -> None:
+    """Every run/product read route must hide resources in another workspace."""
+    _other_workspace, other_source = run_async(create_isolated_workspace_source())
+
+    other_run = run_async(
+        create_test_run(
+            other_source.id,
+            status="completed",
+            triggered_by="manual",
+        )
+    )
+    other_task = run_async(
+        create_test_task(
+            other_run.id,
+            other_source.id,
+            status="succeeded",
+        )
+    )
+    other_product_id = run_async(_seed_product_with_history(other_source))
+
+    list_runs = client.get(
+        "/api/v1/runs",
+        params={"source_id": str(other_source.id), "limit": 100},
+    )
+    assert list_runs.status_code == 200
+    assert list_runs.json()["data"] == []
+
+    get_run = client.get(f"/api/v1/runs/{other_run.id}")
+    assert get_run.status_code == 404
+    assert get_run.json()["error"]["code"] == "RUN_NOT_FOUND"
+
+    run_tasks = client.get(f"/api/v1/runs/{other_run.id}/tasks")
+    assert run_tasks.status_code == 404
+    assert run_tasks.json()["error"]["code"] == "RUN_NOT_FOUND"
+
+    list_products = client.get(
+        "/api/v1/products",
+        params={"source_id": str(other_source.id), "limit": 100},
+    )
+    assert list_products.status_code == 200
+    assert list_products.json()["data"] == []
+
+    get_product = client.get(f"/api/v1/products/{other_product_id}")
+    assert get_product.status_code == 404
+    assert get_product.json()["error"]["code"] == "PRODUCT_NOT_FOUND"
+
+    product_history = client.get(f"/api/v1/products/{other_product_id}/history")
+    assert product_history.status_code == 404
+    assert product_history.json()["error"]["code"] == "PRODUCT_NOT_FOUND"
+
+    legacy_task = client.get(f"/api/v1/scrapes/{other_task.id}")
+    assert legacy_task.status_code == 404
+    assert legacy_task.json()["error"]["code"] == "TASK_NOT_FOUND"
