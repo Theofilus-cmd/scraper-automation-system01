@@ -1,0 +1,88 @@
+import type { RegisterResponse, TokenResponse, User } from "./types";
+
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+
+type ApiErrorBody = {
+  detail?: string;
+};
+
+export class ApiError extends Error {
+  readonly status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+  }
+}
+
+async function request<T>(
+  path: string,
+  options: RequestInit = {},
+  token?: string,
+): Promise<T> {
+  const headers = new Headers(options.headers);
+  headers.set("Accept", "application/json");
+
+  if (options.body !== undefined) {
+    headers.set("Content-Type", "application/json");
+  }
+
+  if (token !== undefined) {
+    headers.set("Authorization", `Bearer ${token}`);
+  }
+
+  let response: Response;
+
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, {
+      ...options,
+      headers,
+    });
+  } catch {
+    throw new ApiError(
+      "Unable to reach the API. Check that the API service is running.",
+      0,
+    );
+  }
+
+  if (!response.ok) {
+    const body = (await response.json().catch(() => ({}))) as ApiErrorBody;
+    throw new ApiError(body.detail ?? `Request failed (${response.status}).`, response.status);
+  }
+
+  return (await response.json()) as T;
+}
+
+export function checkApiReadiness(): Promise<unknown> {
+  return request("/readyz");
+}
+
+export function registerUser(input: {
+  email: string;
+  password: string;
+  displayName: string;
+}): Promise<RegisterResponse> {
+  return request("/api/v1/auth/register", {
+    method: "POST",
+    body: JSON.stringify({
+      email: input.email,
+      password: input.password,
+      display_name: input.displayName,
+    }),
+  });
+}
+
+export function loginUser(input: {
+  email: string;
+  password: string;
+}): Promise<TokenResponse> {
+  return request("/api/v1/auth/login", {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}
+
+export function getCurrentUser(token: string): Promise<User> {
+  return request("/api/v1/auth/me", {}, token);
+}

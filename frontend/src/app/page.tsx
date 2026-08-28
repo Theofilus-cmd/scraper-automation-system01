@@ -2,45 +2,132 @@
 
 import { useEffect, useState } from "react";
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
-
-type ReadyState = "checking" | "ready" | "unavailable";
+import { AuthPanel } from "../components/auth-panel";
+import { ApiError, checkApiReadiness, getCurrentUser } from "../lib/api";
+import {
+  clearStoredAccessToken,
+  getStoredAccessToken,
+  storeAccessToken,
+} from "../lib/auth-storage";
+import type { ApiStatus, AuthSession, User } from "../lib/types";
 
 export default function HomePage() {
-  const [state, setState] = useState<ReadyState>("checking");
+  const [apiStatus, setApiStatus] = useState<ApiStatus>("checking");
+  const [session, setSession] = useState<AuthSession | null>(null);
+  const [isRestoringSession, setIsRestoringSession] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
 
     async function checkReadiness() {
       try {
-        const response = await fetch(`${API_BASE_URL}/readyz`);
+        await checkApiReadiness();
         if (!cancelled) {
-          setState(response.ok ? "ready" : "unavailable");
+          setApiStatus("ready");
         }
       } catch {
         if (!cancelled) {
-          setState("unavailable");
+          setApiStatus("unavailable");
         }
       }
     }
 
-    checkReadiness();
-    const interval = setInterval(checkReadiness, 10_000);
+    void checkReadiness();
+    const interval = window.setInterval(() => {
+      void checkReadiness();
+    }, 10_000);
 
     return () => {
       cancelled = true;
-      clearInterval(interval);
+      window.clearInterval(interval);
     };
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+    const token = getStoredAccessToken();
+
+    async function restoreSession() {
+      if (token === null) {
+        if (!cancelled) {
+          setIsRestoringSession(false);
+        }
+        return;
+      }
+
+      try {
+        const user = await getCurrentUser(token);
+        if (!cancelled) {
+          setSession({ token, user });
+        }
+      } catch (error) {
+        if (error instanceof ApiError && error.status === 401) {
+          clearStoredAccessToken();
+        }
+      } finally {
+        if (!cancelled) {
+          setIsRestoringSession(false);
+        }
+      }
+    }
+
+    void restoreSession();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  function handleAuthenticated(token: string, user: User) {
+    storeAccessToken(token);
+    setSession({ token, user });
+  }
+
+  function handleLogout() {
+    clearStoredAccessToken();
+    setSession(null);
+  }
+
   return (
-    <main>
-      <h1>Scraper Automation System</h1>
-      <p>Phase 0 walking skeleton.</p>
-      <p>
-        API status: <span data-testid="api-status">{state}</span>
-      </p>
+    <main className="app-shell">
+      <header className="app-header">
+        <div>
+          <p className="eyebrow">Product monitoring workspace</p>
+          <h1>Scraper Automation System</h1>
+        </div>
+        <p className="api-status">
+          API status: <span data-testid="api-status">{apiStatus}</span>
+        </p>
+      </header>
+
+      {isRestoringSession ? (
+        <section aria-live="polite" className="loading-panel">
+          Restoring your session…
+        </section>
+      ) : session ? (
+        <section aria-labelledby="dashboard-heading" className="dashboard-panel">
+          <div className="dashboard-heading">
+            <div>
+              <p className="eyebrow">Signed in</p>
+              <h2 id="dashboard-heading">Hello, {session.user.display_name}</h2>
+              <p className="muted">{session.user.email}</p>
+            </div>
+            <button onClick={handleLogout} type="button">
+              Sign out
+            </button>
+          </div>
+
+          <div className="empty-dashboard">
+            <h3>Your monitoring dashboard is ready</h3>
+            <p>
+              The next step adds source creation, scheduled scraping, run status,
+              products, and change history here.
+            </p>
+          </div>
+        </section>
+      ) : (
+        <AuthPanel onAuthenticated={handleAuthenticated} />
+      )}
     </main>
   );
 }
