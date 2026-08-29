@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 
 import { AuthPanel } from "../components/auth-panel";
+import { SourcesPanel } from "../components/sources-panel";
 import { ApiError, checkApiReadiness, getCurrentUser } from "../lib/api";
 import {
   clearStoredAccessToken,
@@ -117,13 +118,7 @@ export default function HomePage() {
             </button>
           </div>
 
-          <div className="empty-dashboard">
-            <h3>Your monitoring dashboard is ready</h3>
-            <p>
-              The next step adds source creation, scheduled scraping, run status,
-              products, and change history here.
-            </p>
-          </div>
+          <SourcesPanel token={session.token} />
         </section>
       ) : (
         <AuthPanel onAuthenticated={handleAuthenticated} />

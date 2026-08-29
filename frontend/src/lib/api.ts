@@ -1,4 +1,4 @@
-import type { RegisterResponse, TokenResponse, User } from "./types";
+import type { PaginatedResponse, RegisterResponse, Source, TokenResponse, User } from "./types";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -85,4 +85,22 @@ export function loginUser(input: {
 
 export function getCurrentUser(token: string): Promise<User> {
   return request("/api/v1/auth/me", {}, token);
+}
+
+export function listSources(token: string): Promise<PaginatedResponse<Source>> {
+  return request("/api/v1/sources", {}, token);
+}
+
+export function createSource(input: {
+  token: string;
+  url: string;
+}): Promise<Source> {
+  return request(
+    "/api/v1/sources",
+    {
+      method: "POST",
+      body: JSON.stringify({ url: input.url }),
+    },
+    input.token,
+  );
 }

@@ -29,3 +29,25 @@ export type AuthSession = {
   token: string;
   user: User;
 };
+
+export type SourceStatus = "active" | "paused" | "archived";
+
+export type Source = {
+  id: string;
+  url: string;
+  normalized_url: string;
+  adapter_type: string;
+  status: SourceStatus;
+  created_at: string | null;
+  updated_at: string | null;
+};
+
+export type Pagination = {
+  next_cursor: string | null;
+  has_more: boolean;
+};
+
+export type PaginatedResponse<T> = {
+  data: T[];
+  pagination: Pagination;
+};

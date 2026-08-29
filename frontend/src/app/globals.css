@@ -253,3 +253,144 @@ form > button,
 .password-toggle:focus-visible {
   outline: 3px solid rgb(37 99 235 / 0.25);
 }
+
+.sources-panel {
+  margin-top: 2rem;
+  border-top: 1px solid #dbe4f0;
+  padding-top: 2rem;
+}
+
+.panel-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.panel-heading h2 {
+  margin: 0.25rem 0 0;
+  color: #14213d;
+  font-size: 1.35rem;
+}
+
+.panel-heading > div > .muted {
+  max-width: 42rem;
+  margin: 0.5rem 0 0;
+}
+
+.panel-heading > button {
+  flex: 0 0 auto;
+  border: 1px solid #b9c6d8;
+  border-radius: 0.55rem;
+  background: #ffffff;
+  color: #263755;
+  padding: 0.7rem 0.9rem;
+  font-weight: 700;
+}
+
+.panel-heading > button:hover:not(:disabled) {
+  border-color: #2563eb;
+  color: #1d4ed8;
+  background: #eff6ff;
+}
+
+.panel-heading > button:focus-visible,
+.source-form > button:focus-visible {
+  outline: 3px solid rgb(37 99 235 / 0.25);
+  outline-offset: 2px;
+}
+
+.panel-heading > button:disabled,
+.source-form > button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.source-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 0.85rem;
+  margin-top: 1.5rem;
+}
+
+.source-form > button {
+  border: 0;
+  border-radius: 0.55rem;
+  background: #2563eb;
+  color: #ffffff;
+  padding: 0.8rem 1rem;
+  font-weight: 700;
+}
+
+.source-form > button:hover:not(:disabled) {
+  background: #1d4ed8;
+}
+
+.source-list {
+  display: grid;
+  gap: 0.75rem;
+  margin: 1.25rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.source-card {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  border: 1px solid #dbe4f0;
+  border-radius: 0.75rem;
+  background: #ffffff;
+  padding: 1rem;
+}
+
+.source-card a {
+  overflow-wrap: anywhere;
+  color: #1d4ed8;
+  font-weight: 700;
+}
+
+.source-card .muted {
+  margin: 0.45rem 0 0;
+}
+
+.status {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  padding: 0.28rem 0.6rem;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.status-active {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.status-paused {
+  background: #fef3c7;
+  color: #92400e;
+}
+
+.status-archived {
+  background: #e2e8f0;
+  color: #475569;
+}
+
+@media (max-width: 600px) {
+  .panel-heading,
+  .source-card {
+    flex-direction: column;
+  }
+
+  .source-form {
+    grid-template-columns: 1fr;
+  }
+
+  .source-form > button,
+  .panel-heading > button {
+    width: 100%;
+  }
+}
