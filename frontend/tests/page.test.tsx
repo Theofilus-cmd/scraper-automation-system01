@@ -33,6 +33,24 @@ describe("HomePage", () => {
     });
   });
 
+  it("toggles password visibility", async () => {
+    fetchMock.mockResolvedValueOnce({
+      json: async () => ({ status: "ok" }),
+      ok: true,
+    } as Response);
+
+    render(<HomePage />);
+
+    const passwordInput = screen.getByLabelText("Password");
+    expect(passwordInput).toHaveAttribute("type", "password");
+
+    fireEvent.click(screen.getByRole("button", { name: "Show password" }));
+    expect(passwordInput).toHaveAttribute("type", "text");
+
+    fireEvent.click(screen.getByRole("button", { name: "Hide password" }));
+    expect(passwordInput).toHaveAttribute("type", "password");
+  });
+
   it("signs in, stores the token, and displays the dashboard", async () => {
     fetchMock
       .mockResolvedValueOnce({

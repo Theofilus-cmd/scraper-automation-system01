@@ -24,6 +24,7 @@ export function AuthPanel({ onAuthenticated }: AuthPanelProps) {
   const [email, setEmail] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [password, setPassword] = useState("");
+  const [isPasswordVisible, setIsPasswordVisible] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -112,14 +113,24 @@ export function AuthPanel({ onAuthenticated }: AuthPanelProps) {
 
         <label>
           Password
-          <input
-            autoComplete={isRegistering ? "new-password" : "current-password"}
-            minLength={isRegistering ? 12 : 1}
-            onChange={(event) => setPassword(event.target.value)}
-            required
-            type="password"
-            value={password}
-          />
+          <span className="password-field">
+            <input
+              autoComplete={isRegistering ? "new-password" : "current-password"}
+              minLength={isRegistering ? 12 : 1}
+              onChange={(event) => setPassword(event.target.value)}
+              required
+              type={isPasswordVisible ? "text" : "password"}
+              value={password}
+            />
+            <button
+              aria-label={isPasswordVisible ? "Hide password" : "Show password"}
+              className="password-toggle"
+              onClick={() => setIsPasswordVisible((visible) => !visible)}
+              type="button"
+            >
+              {isPasswordVisible ? "Hide" : "Show"}
+            </button>
+          </span>
         </label>
 
         {errorMessage ? (

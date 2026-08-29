@@ -221,3 +221,35 @@ form > button,
     padding: 1.25rem;
   }
 }
+
+.password-field {
+  position: relative;
+  display: block;
+}
+
+.password-field input {
+  padding-right: 5rem;
+}
+
+.password-toggle {
+  position: absolute;
+  top: 50%;
+  right: 0.45rem;
+  transform: translateY(-50%);
+  border: 0;
+  border-radius: 0.4rem;
+  background: transparent;
+  color: #2563eb;
+  padding: 0.35rem 0.45rem;
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+
+.password-toggle:hover,
+.password-toggle:focus-visible {
+  background: #dbeafe;
+}
+
+.password-toggle:focus-visible {
+  outline: 3px solid rgb(37 99 235 / 0.25);
+}
