@@ -4,11 +4,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SourcesPanel } from "../src/components/sources-panel";
 import {
   ApiError,
+  archiveSource,
   createSource,
   getRun,
   listRuns,
   listSources,
   triggerSourceRun,
+  unarchiveSource,
+  updateSourceStatus,
 } from "../src/lib/api";
 import type { Run, Source } from "../src/lib/types";
 
@@ -17,19 +20,25 @@ vi.mock("../src/lib/api", async (importOriginal) => {
 
   return {
     ...actual,
+    archiveSource: vi.fn(),
     createSource: vi.fn(),
     getRun: vi.fn(),
     listRuns: vi.fn(),
     listSources: vi.fn(),
     triggerSourceRun: vi.fn(),
+    unarchiveSource: vi.fn(),
+    updateSourceStatus: vi.fn(),
   };
 });
 
+const mockedArchiveSource = vi.mocked(archiveSource);
 const mockedCreateSource = vi.mocked(createSource);
 const mockedGetRun = vi.mocked(getRun);
 const mockedListRuns = vi.mocked(listRuns);
 const mockedListSources = vi.mocked(listSources);
 const mockedTriggerSourceRun = vi.mocked(triggerSourceRun);
+const mockedUnarchiveSource = vi.mocked(unarchiveSource);
+const mockedUpdateSourceStatus = vi.mocked(updateSourceStatus);
 
 const existingSource: Source = {
   id: "source-existing",
@@ -108,6 +117,76 @@ describe("SourcesPanel", () => {
     render(<SourcesPanel token="test-token" />);
 
     expect(await screen.findByText("No sources yet")).toBeInTheDocument();
+  });
+
+  it("pauses an active source and shows the resume action", async () => {
+    mockedListSources.mockResolvedValue({
+      data: [existingSource],
+      pagination: { next_cursor: null, has_more: false },
+    });
+    mockedUpdateSourceStatus.mockResolvedValue({
+      ...existingSource,
+      status: "paused",
+    });
+
+    render(<SourcesPanel token="test-token" />);
+
+    await screen.findByText(existingSource.url);
+    fireEvent.click(screen.getByRole("button", { name: "Pause" }));
+
+    await waitFor(() => {
+      expect(mockedUpdateSourceStatus).toHaveBeenCalledWith({
+        token: "test-token",
+        sourceId: existingSource.id,
+        status: "paused",
+      });
+    });
+
+    expect(await screen.findByText("Paused")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Resume" })).toBeInTheDocument();
+  });
+
+  it("archives a source and shows the unarchive action", async () => {
+    mockedListSources.mockResolvedValue({
+      data: [existingSource],
+      pagination: { next_cursor: null, has_more: false },
+    });
+    mockedArchiveSource.mockResolvedValue();
+    mockedUnarchiveSource.mockResolvedValue(existingSource);
+
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    render(<SourcesPanel token="test-token" />);
+
+    await screen.findByText(existingSource.url);
+    fireEvent.click(screen.getByRole("button", { name: "Archive" }));
+
+    await waitFor(() => {
+      expect(mockedArchiveSource).toHaveBeenCalledWith({
+        token: "test-token",
+        sourceId: existingSource.id,
+      });
+    });
+
+    expect(confirmSpy).toHaveBeenCalledWith(
+      `Archive ${existingSource.url}? Scheduled runs will be disabled.`,
+    );
+    expect(await screen.findByText("Archived")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Unarchive" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Run now" })).toBeDisabled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Unarchive" }));
+
+    await waitFor(() => {
+      expect(mockedUnarchiveSource).toHaveBeenCalledWith({
+        token: "test-token",
+        sourceId: existingSource.id,
+      });
+    });
+
+    expect(await screen.findByText("Active")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Pause" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Run now" })).toBeEnabled();
   });
 
   it("shows the three most recent runs for a source", async () => {
