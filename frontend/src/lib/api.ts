@@ -51,6 +51,10 @@ async function request<T>(
     throw new ApiError(body.detail ?? `Request failed (${response.status}).`, response.status);
   }
 
+  if (response.status === 204) {
+    return undefined as T;
+  }
+
   return (await response.json()) as T;
 }
 
