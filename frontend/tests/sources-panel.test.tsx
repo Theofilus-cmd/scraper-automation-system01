@@ -1,9 +1,15 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { SourcesPanel } from "../src/components/sources-panel";
-import { ApiError, createSource, listSources } from "../src/lib/api";
-import type { Source } from "../src/lib/types";
+import {
+  ApiError,
+  createSource,
+  getRun,
+  listSources,
+  triggerSourceRun,
+} from "../src/lib/api";
+import type { Run, Source } from "../src/lib/types";
 
 vi.mock("../src/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/lib/api")>();
@@ -11,12 +17,16 @@ vi.mock("../src/lib/api", async (importOriginal) => {
   return {
     ...actual,
     createSource: vi.fn(),
+    getRun: vi.fn(),
     listSources: vi.fn(),
+    triggerSourceRun: vi.fn(),
   };
 });
 
 const mockedCreateSource = vi.mocked(createSource);
+const mockedGetRun = vi.mocked(getRun);
 const mockedListSources = vi.mocked(listSources);
+const mockedTriggerSourceRun = vi.mocked(triggerSourceRun);
 
 const existingSource: Source = {
   id: "source-existing",
@@ -38,8 +48,30 @@ const addedSource: Source = {
   updated_at: "2026-08-29T00:01:00Z",
 };
 
+const completedRun: Run = {
+  id: "run-1",
+  source_id: existingSource.id,
+  schedule_id: null,
+  status: "completed",
+  triggered_by: "manual",
+  total_tasks: 1,
+  succeeded_tasks: 1,
+  failed_tasks: 0,
+  started_at: "2026-08-29T00:02:00Z",
+  finished_at: "2026-08-29T00:02:01Z",
+  created_at: "2026-08-29T00:02:00Z",
+};
+
+const runningRun: Run = {
+  ...completedRun,
+  status: "running",
+  succeeded_tasks: 0,
+  finished_at: null,
+};
+
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
 });
 
 beforeEach(() => {
@@ -97,6 +129,94 @@ describe("SourcesPanel", () => {
 
     expect(await screen.findByText(addedSource.url)).toBeInTheDocument();
     expect(urlInput).toHaveValue("");
+  });
+
+  it("triggers a run and shows its latest completed status", async () => {
+    mockedListSources.mockResolvedValue({
+      data: [existingSource],
+      pagination: { next_cursor: null, has_more: false },
+    });
+    mockedTriggerSourceRun.mockResolvedValue({
+      run_id: completedRun.id,
+      task_id: "task-1",
+      status: "pending",
+    });
+    mockedGetRun.mockResolvedValue(completedRun);
+
+    render(<SourcesPanel token="test-token" />);
+
+    await screen.findByText(existingSource.url);
+    fireEvent.click(screen.getByRole("button", { name: "Run now" }));
+
+    await waitFor(() => {
+      expect(mockedTriggerSourceRun).toHaveBeenCalledWith({
+        token: "test-token",
+        sourceId: existingSource.id,
+      });
+    });
+
+    expect(await screen.findByText(/Latest run: Completed/)).toBeInTheDocument();
+    expect(screen.getByText(/1\/1 tasks succeeded/)).toBeInTheDocument();
+    expect(mockedGetRun).toHaveBeenCalledWith({
+      token: "test-token",
+      runId: completedRun.id,
+    });
+  });
+
+  it("polls an in-progress run until it completes", async () => {
+    vi.useFakeTimers();
+
+    mockedListSources.mockResolvedValue({
+      data: [existingSource],
+      pagination: { next_cursor: null, has_more: false },
+    });
+    mockedTriggerSourceRun.mockResolvedValue({
+      run_id: runningRun.id,
+      task_id: "task-1",
+      status: "pending",
+    });
+    mockedGetRun
+      .mockResolvedValueOnce(runningRun)
+      .mockResolvedValueOnce(completedRun);
+
+    render(<SourcesPanel token="test-token" />);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(screen.getByText(existingSource.url)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Run now" }));
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+
+    expect(screen.getByText(/Latest run: Running/)).toBeInTheDocument();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+
+    expect(screen.getByText(/Latest run: Completed/)).toBeInTheDocument();
+    expect(mockedGetRun).toHaveBeenCalledTimes(2);
+  });
+
+  it("shows a source-level error when triggering a run fails", async () => {
+    mockedListSources.mockResolvedValue({
+      data: [existingSource],
+      pagination: { next_cursor: null, has_more: false },
+    });
+    mockedTriggerSourceRun.mockRejectedValue(new ApiError("Run already in progress.", 409));
+
+    render(<SourcesPanel token="test-token" />);
+
+    await screen.findByText(existingSource.url);
+    fireEvent.click(screen.getByRole("button", { name: "Run now" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Run already in progress.");
+    expect(screen.getByRole("button", { name: "Run now" })).toBeEnabled();
   });
 
   it("shows an API error when loading sources fails", async () => {

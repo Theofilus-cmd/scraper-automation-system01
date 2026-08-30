@@ -1,4 +1,4 @@
-import type { PaginatedResponse, RegisterResponse, Source, TokenResponse, User } from "./types";
+import type { PaginatedResponse, RegisterResponse, Run, Source, TokenResponse, TriggeredRun, User } from "./types";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -103,4 +103,24 @@ export function createSource(input: {
     },
     input.token,
   );
+}
+
+export function triggerSourceRun(input: {
+  token: string;
+  sourceId: string;
+}): Promise<TriggeredRun> {
+  return request(
+    `/api/v1/sources/${input.sourceId}/runs`,
+    {
+      method: "POST",
+    },
+    input.token,
+  );
+}
+
+export function getRun(input: {
+  token: string;
+  runId: string;
+}): Promise<Run> {
+  return request(`/api/v1/runs/${input.runId}`, {}, input.token);
 }

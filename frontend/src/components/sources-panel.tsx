@@ -2,11 +2,25 @@
 
 import { FormEvent, useCallback, useEffect, useState } from "react";
 
-import { ApiError, createSource, listSources } from "../lib/api";
-import type { Source } from "../lib/types";
+import {
+  ApiError,
+  createSource,
+  getRun,
+  listSources,
+  triggerSourceRun,
+} from "../lib/api";
+import type { Run, RunStatus, Source } from "../lib/types";
 
 type SourcesPanelProps = {
   token: string;
+};
+
+type SourceRunState = {
+  error: string | null;
+  isTriggering: boolean;
+  run: Run | null;
+  runId: string | null;
+  status: RunStatus | null;
 };
 
 function messageFor(error: unknown): string {
@@ -17,8 +31,15 @@ function messageFor(error: unknown): string {
   return "Something went wrong. Please try again.";
 }
 
-function formatStatus(status: Source["status"]): string {
-  return status.charAt(0).toUpperCase() + status.slice(1);
+function formatStatus(status: string): string {
+  return status
+    .split("_")
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
+}
+
+function isRunInProgress(status: RunStatus | null): boolean {
+  return status === "queued" || status === "pending" || status === "running";
 }
 
 export function SourcesPanel({ token }: SourcesPanelProps) {
@@ -27,6 +48,9 @@ export function SourcesPanel({ token }: SourcesPanelProps) {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isCreating, setIsCreating] = useState(false);
+  const [runsBySourceId, setRunsBySourceId] = useState<Record<string, SourceRunState>>(
+    {},
+  );
 
   const loadSources = useCallback(async () => {
     setErrorMessage(null);
@@ -45,6 +69,52 @@ export function SourcesPanel({ token }: SourcesPanelProps) {
   useEffect(() => {
     void loadSources();
   }, [loadSources]);
+
+  useEffect(() => {
+    const activeRuns = Object.entries(runsBySourceId).filter(
+      ([, runState]) => runState.runId && isRunInProgress(runState.status),
+    );
+
+    if (activeRuns.length === 0) {
+      return;
+    }
+
+    const timeoutId = window.setTimeout(() => {
+      activeRuns.forEach(([sourceId, runState]) => {
+        if (!runState.runId) {
+          return;
+        }
+
+        void getRun({ token, runId: runState.runId })
+          .then((run) => {
+            setRunsBySourceId((current) => ({
+              ...current,
+              [sourceId]: {
+                error: null,
+                isTriggering: false,
+                run,
+                runId: run.id,
+                status: run.status,
+              },
+            }));
+          })
+          .catch((error: unknown) => {
+            setRunsBySourceId((current) => ({
+              ...current,
+              [sourceId]: {
+                error: messageFor(error),
+                isTriggering: false,
+                run: current[sourceId]?.run ?? null,
+                runId: current[sourceId]?.runId ?? null,
+                status: null,
+              },
+            }));
+          });
+      });
+    }, 2_000);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [runsBySourceId, token]);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -65,6 +135,64 @@ export function SourcesPanel({ token }: SourcesPanelProps) {
       setErrorMessage(messageFor(error));
     } finally {
       setIsCreating(false);
+    }
+  }
+
+  async function handleRunNow(source: Source) {
+    setRunsBySourceId((current) => ({
+      ...current,
+      [source.id]: {
+        error: null,
+        isTriggering: true,
+        run: current[source.id]?.run ?? null,
+        runId: current[source.id]?.runId ?? null,
+        status: current[source.id]?.status ?? null,
+      },
+    }));
+
+    try {
+      const triggeredRun = await triggerSourceRun({
+        token,
+        sourceId: source.id,
+      });
+
+      setRunsBySourceId((current) => ({
+        ...current,
+        [source.id]: {
+          error: null,
+          isTriggering: false,
+          run: null,
+          runId: triggeredRun.run_id,
+          status: triggeredRun.status,
+        },
+      }));
+
+      const run = await getRun({
+        token,
+        runId: triggeredRun.run_id,
+      });
+
+      setRunsBySourceId((current) => ({
+        ...current,
+        [source.id]: {
+          error: null,
+          isTriggering: false,
+          run,
+          runId: run.id,
+          status: run.status,
+        },
+      }));
+    } catch (error) {
+      setRunsBySourceId((current) => ({
+        ...current,
+        [source.id]: {
+          error: messageFor(error),
+          isTriggering: false,
+          run: current[source.id]?.run ?? null,
+          runId: current[source.id]?.runId ?? null,
+          status: current[source.id]?.status ?? null,
+        },
+      }));
     }
   }
 
@@ -120,19 +248,50 @@ export function SourcesPanel({ token }: SourcesPanelProps) {
         </div>
       ) : (
         <ul className="source-list">
-          {sources.map((source) => (
-            <li key={source.id} className="source-card">
-              <div>
-                <a href={source.url} rel="noreferrer" target="_blank">
-                  {source.url}
-                </a>
-                <p className="muted">Adapter: {source.adapter_type}</p>
-              </div>
-              <span className={`status status-${source.status}`}>
-                {formatStatus(source.status)}
-              </span>
-            </li>
-          ))}
+          {sources.map((source) => {
+            const runState = runsBySourceId[source.id];
+            const isRunDisabled =
+              runState?.isTriggering || isRunInProgress(runState?.status ?? null);
+
+            return (
+              <li key={source.id} className="source-card">
+                <div className="source-card-details">
+                  <a href={source.url} rel="noreferrer" target="_blank">
+                    {source.url}
+                  </a>
+                  <p className="muted">Adapter: {source.adapter_type}</p>
+
+                  {runState?.status ? (
+                    <p aria-live="polite" className="run-status">
+                      Latest run: {formatStatus(runState.status)}
+                      {runState.run
+                        ? ` · ${runState.run.succeeded_tasks}/${runState.run.total_tasks} tasks succeeded`
+                        : null}
+                    </p>
+                  ) : null}
+
+                  {runState?.error ? (
+                    <p aria-live="polite" className="run-error" role="alert">
+                      {runState.error}
+                    </p>
+                  ) : null}
+                </div>
+
+                <div className="source-card-actions">
+                  <span className={`status status-${source.status}`}>
+                    {formatStatus(source.status)}
+                  </span>
+                  <button
+                    disabled={isRunDisabled}
+                    onClick={() => void handleRunNow(source)}
+                    type="button"
+                  >
+                    {runState?.isTriggering ? "Queueing…" : "Run now"}
+                  </button>
+                </div>
+              </li>
+            );
+          })}
         </ul>
       )}
     </section>

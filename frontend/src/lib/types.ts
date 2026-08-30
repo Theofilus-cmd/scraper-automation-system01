@@ -51,3 +51,32 @@ export type PaginatedResponse<T> = {
   data: T[];
   pagination: Pagination;
 };
+
+export type RunStatus =
+  | "queued"
+  | "pending"
+  | "running"
+  | "completed"
+  | "completed_with_errors"
+  | "failed"
+  | "cancelled";
+
+export type Run = {
+  id: string;
+  source_id: string;
+  schedule_id: string | null;
+  status: RunStatus;
+  triggered_by: "manual" | "schedule";
+  total_tasks: number;
+  succeeded_tasks: number;
+  failed_tasks: number;
+  started_at: string | null;
+  finished_at: string | null;
+  created_at: string | null;
+};
+
+export type TriggeredRun = {
+  run_id: string;
+  task_id: string | null;
+  status: RunStatus;
+};
