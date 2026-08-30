@@ -6,6 +6,7 @@ import {
   ApiError,
   createSource,
   getRun,
+  listRuns,
   listSources,
   triggerSourceRun,
 } from "../src/lib/api";
@@ -18,6 +19,7 @@ vi.mock("../src/lib/api", async (importOriginal) => {
     ...actual,
     createSource: vi.fn(),
     getRun: vi.fn(),
+    listRuns: vi.fn(),
     listSources: vi.fn(),
     triggerSourceRun: vi.fn(),
   };
@@ -25,6 +27,7 @@ vi.mock("../src/lib/api", async (importOriginal) => {
 
 const mockedCreateSource = vi.mocked(createSource);
 const mockedGetRun = vi.mocked(getRun);
+const mockedListRuns = vi.mocked(listRuns);
 const mockedListSources = vi.mocked(listSources);
 const mockedTriggerSourceRun = vi.mocked(triggerSourceRun);
 
@@ -76,6 +79,10 @@ afterEach(() => {
 
 beforeEach(() => {
   vi.resetAllMocks();
+  mockedListRuns.mockResolvedValue({
+    data: [],
+    pagination: { next_cursor: null, has_more: false },
+  });
 });
 
 describe("SourcesPanel", () => {
@@ -101,6 +108,38 @@ describe("SourcesPanel", () => {
     render(<SourcesPanel token="test-token" />);
 
     expect(await screen.findByText("No sources yet")).toBeInTheDocument();
+  });
+
+  it("shows the three most recent runs for a source", async () => {
+    mockedListSources.mockResolvedValue({
+      data: [existingSource],
+      pagination: { next_cursor: null, has_more: false },
+    });
+    mockedListRuns.mockResolvedValue({
+      data: [
+        completedRun,
+        {
+          ...completedRun,
+          id: "run-2",
+          status: "failed",
+          triggered_by: "schedule",
+          succeeded_tasks: 0,
+          failed_tasks: 1,
+        },
+      ],
+      pagination: { next_cursor: null, has_more: false },
+    });
+
+    render(<SourcesPanel token="test-token" />);
+
+    expect(await screen.findByText("Recent runs")).toBeInTheDocument();
+    expect(screen.getByText("Completed · Manual · 1/1 succeeded")).toBeInTheDocument();
+    expect(screen.getByText("Failed · Scheduled · 0/1 succeeded")).toBeInTheDocument();
+    expect(mockedListRuns).toHaveBeenCalledWith({
+      token: "test-token",
+      sourceId: existingSource.id,
+      limit: 3,
+    });
   });
 
   it("adds a source and clears the URL field", async () => {

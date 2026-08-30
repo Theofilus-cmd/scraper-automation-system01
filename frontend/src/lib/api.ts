@@ -124,3 +124,16 @@ export function getRun(input: {
 }): Promise<Run> {
   return request(`/api/v1/runs/${input.runId}`, {}, input.token);
 }
+
+export function listRuns(input: {
+  token: string;
+  sourceId: string;
+  limit?: number;
+}): Promise<PaginatedResponse<Run>> {
+  const searchParams = new URLSearchParams({
+    source_id: input.sourceId,
+    limit: String(input.limit ?? 3),
+  });
+
+  return request(`/api/v1/runs?${searchParams.toString()}`, {}, input.token);
+}

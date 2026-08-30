@@ -6,6 +6,7 @@ import {
   ApiError,
   createSource,
   getRun,
+  listRuns,
   listSources,
   triggerSourceRun,
 } from "../lib/api";
@@ -51,6 +52,33 @@ export function SourcesPanel({ token }: SourcesPanelProps) {
   const [runsBySourceId, setRunsBySourceId] = useState<Record<string, SourceRunState>>(
     {},
   );
+  const [runHistoryBySourceId, setRunHistoryBySourceId] = useState<Record<string, Run[]>>(
+    {},
+  );
+
+  const loadRunHistory = useCallback(
+    async (sourceIds: string[]) => {
+      const results = await Promise.allSettled(
+        sourceIds.map(async (sourceId) => {
+          const response = await listRuns({ token, sourceId, limit: 3 });
+          return { sourceId, runs: response.data };
+        }),
+      );
+
+      setRunHistoryBySourceId((current) => {
+        const next = { ...current };
+
+        results.forEach((result) => {
+          if (result.status === "fulfilled") {
+            next[result.value.sourceId] = result.value.runs;
+          }
+        });
+
+        return next;
+      });
+    },
+    [token],
+  );
 
   const loadSources = useCallback(async () => {
     setErrorMessage(null);
@@ -59,12 +87,13 @@ export function SourcesPanel({ token }: SourcesPanelProps) {
     try {
       const response = await listSources(token);
       setSources(response.data);
+      void loadRunHistory(response.data.map((source) => source.id));
     } catch (error) {
       setErrorMessage(messageFor(error));
     } finally {
       setIsLoading(false);
     }
-  }, [token]);
+  }, [loadRunHistory, token]);
 
   useEffect(() => {
     void loadSources();
@@ -182,6 +211,16 @@ export function SourcesPanel({ token }: SourcesPanelProps) {
           status: run.status,
         },
       }));
+
+      setRunHistoryBySourceId((current) => {
+        const previous = current[source.id] ?? [];
+        const withoutCurrentRun = previous.filter((item) => item.id !== run.id);
+
+        return {
+          ...current,
+          [source.id]: [run, ...withoutCurrentRun].slice(0, 3),
+        };
+      });
     } catch (error) {
       setRunsBySourceId((current) => ({
         ...current,
@@ -250,6 +289,7 @@ export function SourcesPanel({ token }: SourcesPanelProps) {
         <ul className="source-list">
           {sources.map((source) => {
             const runState = runsBySourceId[source.id];
+            const runHistory = runHistoryBySourceId[source.id] ?? [];
             const isRunDisabled =
               runState?.isTriggering || isRunInProgress(runState?.status ?? null);
 
@@ -274,6 +314,21 @@ export function SourcesPanel({ token }: SourcesPanelProps) {
                     <p aria-live="polite" className="run-error" role="alert">
                       {runState.error}
                     </p>
+                  ) : null}
+
+                  {runHistory.length > 0 ? (
+                    <div className="run-history">
+                      <h3>Recent runs</h3>
+                      <ul>
+                        {runHistory.map((run) => (
+                          <li key={run.id}>
+                            {formatStatus(run.status)} ·{" "}
+                            {run.triggered_by === "manual" ? "Manual" : "Scheduled"} ·{" "}
+                            {run.succeeded_tasks}/{run.total_tasks} succeeded
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
                   ) : null}
                 </div>
 
