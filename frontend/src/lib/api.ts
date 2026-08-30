@@ -137,3 +137,44 @@ export function listRuns(input: {
 
   return request(`/api/v1/runs?${searchParams.toString()}`, {}, input.token);
 }
+
+export function updateSourceStatus(input: {
+  token: string;
+  sourceId: string;
+  status: "active" | "paused";
+}): Promise<Source> {
+  return request(
+    `/api/v1/sources/${input.sourceId}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify({ status: input.status }),
+    },
+    input.token,
+  );
+}
+
+export async function archiveSource(input: {
+  token: string;
+  sourceId: string;
+}): Promise<void> {
+  await request<unknown>(
+    `/api/v1/sources/${input.sourceId}`,
+    {
+      method: "DELETE",
+    },
+    input.token,
+  );
+}
+
+export function unarchiveSource(input: {
+  token: string;
+  sourceId: string;
+}): Promise<Source> {
+  return request(
+    `/api/v1/sources/${input.sourceId}/unarchive`,
+    {
+      method: "POST",
+    },
+    input.token,
+  );
+}

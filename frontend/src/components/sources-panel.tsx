@@ -4,11 +4,14 @@ import { FormEvent, useCallback, useEffect, useState } from "react";
 
 import {
   ApiError,
+  archiveSource,
+  updateSourceStatus,
   createSource,
   getRun,
   listRuns,
   listSources,
   triggerSourceRun,
+  unarchiveSource,
 } from "../lib/api";
 import type { Run, RunStatus, Source } from "../lib/types";
 
@@ -49,6 +52,8 @@ export function SourcesPanel({ token }: SourcesPanelProps) {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isCreating, setIsCreating] = useState(false);
+  const [isUpdatingSourceId, setIsUpdatingSourceId] = useState<string | null>(null);
+  const [sourceActionErrors, setSourceActionErrors] = useState<Record<string, string>>({});
   const [runsBySourceId, setRunsBySourceId] = useState<Record<string, SourceRunState>>(
     {},
   );
@@ -164,6 +169,95 @@ export function SourcesPanel({ token }: SourcesPanelProps) {
       setErrorMessage(messageFor(error));
     } finally {
       setIsCreating(false);
+    }
+  }
+
+  async function handleArchiveSource(source: Source) {
+    if (!window.confirm(`Archive ${source.url}? Scheduled runs will be disabled.`)) {
+      return;
+    }
+
+    setIsUpdatingSourceId(source.id);
+    setSourceActionErrors((current) => {
+      const next = { ...current };
+      delete next[source.id];
+      return next;
+    });
+
+    try {
+      await archiveSource({ token, sourceId: source.id });
+      setSources((currentSources) =>
+        currentSources.map((currentSource) =>
+          currentSource.id === source.id
+            ? { ...currentSource, status: "archived" }
+            : currentSource,
+        ),
+      );
+    } catch (error) {
+      setSourceActionErrors((current) => ({
+        ...current,
+        [source.id]: messageFor(error),
+      }));
+    } finally {
+      setIsUpdatingSourceId(null);
+    }
+  }
+
+  async function handleUnarchiveSource(source: Source) {
+    setIsUpdatingSourceId(source.id);
+    setSourceActionErrors((current) => {
+      const next = { ...current };
+      delete next[source.id];
+      return next;
+    });
+
+    try {
+      const updatedSource = await unarchiveSource({ token, sourceId: source.id });
+      setSources((currentSources) =>
+        currentSources.map((currentSource) =>
+          currentSource.id === updatedSource.id ? updatedSource : currentSource,
+        ),
+      );
+    } catch (error) {
+      setSourceActionErrors((current) => ({
+        ...current,
+        [source.id]: messageFor(error),
+      }));
+    } finally {
+      setIsUpdatingSourceId(null);
+    }
+  }
+
+  async function handleSourceStatusChange(
+    source: Source,
+    status: "active" | "paused",
+  ) {
+    setIsUpdatingSourceId(source.id);
+    setSourceActionErrors((current) => {
+      const next = { ...current };
+      delete next[source.id];
+      return next;
+    });
+
+    try {
+      const updatedSource = await updateSourceStatus({
+        token,
+        sourceId: source.id,
+        status,
+      });
+
+      setSources((currentSources) =>
+        currentSources.map((currentSource) =>
+          currentSource.id === updatedSource.id ? updatedSource : currentSource,
+        ),
+      );
+    } catch (error) {
+      setSourceActionErrors((current) => ({
+        ...current,
+        [source.id]: messageFor(error),
+      }));
+    } finally {
+      setIsUpdatingSourceId(null);
     }
   }
 
@@ -290,8 +384,11 @@ export function SourcesPanel({ token }: SourcesPanelProps) {
           {sources.map((source) => {
             const runState = runsBySourceId[source.id];
             const runHistory = runHistoryBySourceId[source.id] ?? [];
+            const isUpdatingSource = isUpdatingSourceId === source.id;
             const isRunDisabled =
-              runState?.isTriggering || isRunInProgress(runState?.status ?? null);
+              isUpdatingSource ||
+              runState?.isTriggering ||
+              isRunInProgress(runState?.status ?? null);
 
             return (
               <li key={source.id} className="source-card">
@@ -316,6 +413,12 @@ export function SourcesPanel({ token }: SourcesPanelProps) {
                     </p>
                   ) : null}
 
+                  {sourceActionErrors[source.id] ? (
+                    <p aria-live="polite" className="run-error" role="alert">
+                      {sourceActionErrors[source.id]}
+                    </p>
+                  ) : null}
+
                   {runHistory.length > 0 ? (
                     <div className="run-history">
                       <h3>Recent runs</h3>
@@ -336,8 +439,46 @@ export function SourcesPanel({ token }: SourcesPanelProps) {
                   <span className={`status status-${source.status}`}>
                     {formatStatus(source.status)}
                   </span>
+
+                  {source.status !== "archived" ? (
+                    <button
+                      disabled={isUpdatingSource}
+                      onClick={() =>
+                        void handleSourceStatusChange(
+                          source,
+                          source.status === "active" ? "paused" : "active",
+                        )
+                      }
+                      type="button"
+                    >
+                      {isUpdatingSource
+                        ? "Updating…"
+                        : source.status === "active"
+                          ? "Pause"
+                          : "Resume"}
+                    </button>
+                  ) : null}
+
+                  {source.status === "archived" ? (
+                    <button
+                      disabled={isUpdatingSource}
+                      onClick={() => void handleUnarchiveSource(source)}
+                      type="button"
+                    >
+                      {isUpdatingSource ? "Updating…" : "Unarchive"}
+                    </button>
+                  ) : (
+                    <button
+                      disabled={isUpdatingSource}
+                      onClick={() => void handleArchiveSource(source)}
+                      type="button"
+                    >
+                      {isUpdatingSource ? "Updating…" : "Archive"}
+                    </button>
+                  )}
+
                   <button
-                    disabled={isRunDisabled}
+                    disabled={isRunDisabled || source.status === "archived"}
                     onClick={() => void handleRunNow(source)}
                     type="button"
                   >
