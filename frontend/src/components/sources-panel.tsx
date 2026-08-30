@@ -8,12 +8,15 @@ import {
   updateSourceStatus,
   createSource,
   getRun,
+  getSource,
   listRuns,
   listSources,
   triggerSourceRun,
   unarchiveSource,
+  upsertSourceSchedule,
+  deleteSourceSchedule,
 } from "../lib/api";
-import type { Run, RunStatus, Source } from "../lib/types";
+import type { Run, RunStatus, Schedule, Source } from "../lib/types";
 
 type SourcesPanelProps = {
   token: string;
@@ -53,6 +56,9 @@ export function SourcesPanel({ token }: SourcesPanelProps) {
   const [isLoading, setIsLoading] = useState(true);
   const [isCreating, setIsCreating] = useState(false);
   const [isUpdatingSourceId, setIsUpdatingSourceId] = useState<string | null>(null);
+  const [isSavingScheduleSourceId, setIsSavingScheduleSourceId] = useState<string | null>(null);
+  const [scheduleIntervalBySourceId, setScheduleIntervalBySourceId] = useState<Record<string, number>>({});
+  const [schedulesBySourceId, setSchedulesBySourceId] = useState<Record<string, Schedule | null>>({});
   const [sourceActionErrors, setSourceActionErrors] = useState<Record<string, string>>({});
   const [runsBySourceId, setRunsBySourceId] = useState<Record<string, SourceRunState>>(
     {},
@@ -85,6 +91,42 @@ export function SourcesPanel({ token }: SourcesPanelProps) {
     [token],
   );
 
+  const loadSchedules = useCallback(
+    async (sourceIds: string[]) => {
+      const results = await Promise.allSettled(
+        sourceIds.map(async (sourceId) => {
+          const source = await getSource({ token, sourceId });
+          return { sourceId, schedule: source.schedule };
+        }),
+      );
+
+      setSchedulesBySourceId((current) => {
+        const next = { ...current };
+
+        results.forEach((result) => {
+          if (result.status === "fulfilled") {
+            next[result.value.sourceId] = result.value.schedule;
+          }
+        });
+
+        return next;
+      });
+
+      setScheduleIntervalBySourceId((current) => {
+        const next = { ...current };
+
+        results.forEach((result) => {
+          if (result.status === "fulfilled" && result.value.schedule !== null) {
+            next[result.value.sourceId] = result.value.schedule.interval_minutes;
+          }
+        });
+
+        return next;
+      });
+    },
+    [token],
+  );
+
   const loadSources = useCallback(async () => {
     setErrorMessage(null);
     setIsLoading(true);
@@ -92,13 +134,15 @@ export function SourcesPanel({ token }: SourcesPanelProps) {
     try {
       const response = await listSources(token);
       setSources(response.data);
-      void loadRunHistory(response.data.map((source) => source.id));
+      const sourceIds = response.data.map((source) => source.id);
+      void loadRunHistory(sourceIds);
+      void loadSchedules(sourceIds);
     } catch (error) {
       setErrorMessage(messageFor(error));
     } finally {
       setIsLoading(false);
     }
-  }, [loadRunHistory, token]);
+  }, [loadRunHistory, loadSchedules, token]);
 
   useEffect(() => {
     void loadSources();
@@ -261,6 +305,63 @@ export function SourcesPanel({ token }: SourcesPanelProps) {
     }
   }
 
+  async function handleSaveSchedule(source: Source) {
+    const intervalMinutes = scheduleIntervalBySourceId[source.id] ?? 15;
+
+    setIsSavingScheduleSourceId(source.id);
+    setSourceActionErrors((current) => {
+      const next = { ...current };
+      delete next[source.id];
+      return next;
+    });
+
+    try {
+      const schedule = await upsertSourceSchedule({
+        token,
+        sourceId: source.id,
+        intervalMinutes,
+      });
+      setSchedulesBySourceId((current) => ({
+        ...current,
+        [source.id]: schedule,
+      }));
+    } catch (error) {
+      setSourceActionErrors((current) => ({
+        ...current,
+        [source.id]: messageFor(error),
+      }));
+    } finally {
+      setIsSavingScheduleSourceId(null);
+    }
+  }
+
+  async function handleDeleteSchedule(source: Source) {
+    setIsSavingScheduleSourceId(source.id);
+    setSourceActionErrors((current) => {
+      const next = { ...current };
+      delete next[source.id];
+      return next;
+    });
+
+    try {
+      await deleteSourceSchedule({
+        token,
+        sourceId: source.id,
+      });
+      setSchedulesBySourceId((current) => ({
+        ...current,
+        [source.id]: null,
+      }));
+    } catch (error) {
+      setSourceActionErrors((current) => ({
+        ...current,
+        [source.id]: messageFor(error),
+      }));
+    } finally {
+      setIsSavingScheduleSourceId(null);
+    }
+  }
+
   async function handleRunNow(source: Source) {
     setRunsBySourceId((current) => ({
       ...current,
@@ -384,6 +485,7 @@ export function SourcesPanel({ token }: SourcesPanelProps) {
           {sources.map((source) => {
             const runState = runsBySourceId[source.id];
             const runHistory = runHistoryBySourceId[source.id] ?? [];
+            const schedule = schedulesBySourceId[source.id] ?? null;
             const isUpdatingSource = isUpdatingSourceId === source.id;
             const isRunDisabled =
               isUpdatingSource ||
@@ -397,6 +499,19 @@ export function SourcesPanel({ token }: SourcesPanelProps) {
                     {source.url}
                   </a>
                   <p className="muted">Adapter: {source.adapter_type}</p>
+
+                  {schedule ? (
+                    <>
+                      <p className="muted">
+                        Runs every {schedule.interval_minutes} minutes
+                      </p>
+                      {schedule.next_run_at ? (
+                        <p className="muted">Next run: {schedule.next_run_at}</p>
+                      ) : null}
+                    </>
+                  ) : (
+                    <p className="muted">No schedule configured</p>
+                  )}
 
                   {runState?.status ? (
                     <p aria-live="polite" className="run-status">
@@ -476,6 +591,60 @@ export function SourcesPanel({ token }: SourcesPanelProps) {
                       {isUpdatingSource ? "Updating…" : "Archive"}
                     </button>
                   )}
+
+                  <label className="schedule-control">
+                    Schedule
+                    <select
+                      disabled={
+                        source.status === "archived" ||
+                        isUpdatingSource ||
+                        isSavingScheduleSourceId === source.id
+                      }
+                      onChange={(event) =>
+                        setScheduleIntervalBySourceId((current) => ({
+                          ...current,
+                          [source.id]: Number(event.target.value),
+                        }))
+                      }
+                      value={scheduleIntervalBySourceId[source.id] ?? 15}
+                    >
+                      <option value={15}>Every 15 minutes</option>
+                      <option value={30}>Every 30 minutes</option>
+                      <option value={60}>Every hour</option>
+                      <option value={360}>Every 6 hours</option>
+                      <option value={1440}>Every day</option>
+                    </select>
+                  </label>
+
+                  <button
+                    disabled={
+                      source.status === "archived" ||
+                      isUpdatingSource ||
+                      isSavingScheduleSourceId === source.id
+                    }
+                    onClick={() => void handleSaveSchedule(source)}
+                    type="button"
+                  >
+                    {isSavingScheduleSourceId === source.id
+                      ? "Saving schedule…"
+                      : "Save schedule"}
+                  </button>
+
+                  {schedule ? (
+                    <button
+                      disabled={
+                        source.status === "archived" ||
+                        isUpdatingSource ||
+                        isSavingScheduleSourceId === source.id
+                      }
+                      onClick={() => void handleDeleteSchedule(source)}
+                      type="button"
+                    >
+                      {isSavingScheduleSourceId === source.id
+                        ? "Removing schedule…"
+                        : "Remove schedule"}
+                    </button>
+                  ) : null}
 
                   <button
                     disabled={isRunDisabled || source.status === "archived"}

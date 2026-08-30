@@ -6,11 +6,14 @@ import {
   ApiError,
   archiveSource,
   createSource,
+  deleteSourceSchedule,
   getRun,
+  getSource,
   listRuns,
   listSources,
   triggerSourceRun,
   unarchiveSource,
+  upsertSourceSchedule,
   updateSourceStatus,
 } from "../src/lib/api";
 import type { Run, Source } from "../src/lib/types";
@@ -22,22 +25,28 @@ vi.mock("../src/lib/api", async (importOriginal) => {
     ...actual,
     archiveSource: vi.fn(),
     createSource: vi.fn(),
+    deleteSourceSchedule: vi.fn(),
     getRun: vi.fn(),
+    getSource: vi.fn(),
     listRuns: vi.fn(),
     listSources: vi.fn(),
     triggerSourceRun: vi.fn(),
     unarchiveSource: vi.fn(),
+    upsertSourceSchedule: vi.fn(),
     updateSourceStatus: vi.fn(),
   };
 });
 
 const mockedArchiveSource = vi.mocked(archiveSource);
 const mockedCreateSource = vi.mocked(createSource);
+const mockedDeleteSourceSchedule = vi.mocked(deleteSourceSchedule);
+const mockedGetSource = vi.mocked(getSource);
 const mockedGetRun = vi.mocked(getRun);
 const mockedListRuns = vi.mocked(listRuns);
 const mockedListSources = vi.mocked(listSources);
 const mockedTriggerSourceRun = vi.mocked(triggerSourceRun);
 const mockedUnarchiveSource = vi.mocked(unarchiveSource);
+const mockedUpsertSourceSchedule = vi.mocked(upsertSourceSchedule);
 const mockedUpdateSourceStatus = vi.mocked(updateSourceStatus);
 
 const existingSource: Source = {
@@ -88,6 +97,10 @@ afterEach(() => {
 
 beforeEach(() => {
   vi.resetAllMocks();
+  mockedGetSource.mockImplementation(async ({ sourceId }) => ({
+    ...(sourceId === existingSource.id ? existingSource : addedSource),
+    schedule: null,
+  }));
   mockedListRuns.mockResolvedValue({
     data: [],
     pagination: { next_cursor: null, has_more: false },
@@ -117,6 +130,97 @@ describe("SourcesPanel", () => {
     render(<SourcesPanel token="test-token" />);
 
     expect(await screen.findByText("No sources yet")).toBeInTheDocument();
+  });
+
+  it("shows an existing schedule and its next run", async () => {
+    mockedListSources.mockResolvedValue({
+      data: [existingSource],
+      pagination: { next_cursor: null, has_more: false },
+    });
+    mockedGetSource.mockResolvedValue({
+      ...existingSource,
+      schedule: {
+        id: "schedule-1",
+        source_id: existingSource.id,
+        interval_minutes: 60,
+        is_active: true,
+        next_run_at: "2026-08-30T12:00:00Z",
+        last_run_at: null,
+        created_at: "2026-08-30T11:00:00Z",
+        updated_at: "2026-08-30T11:00:00Z",
+      },
+    });
+
+    render(<SourcesPanel token="test-token" />);
+
+    expect(await screen.findByText("Runs every 60 minutes")).toBeInTheDocument();
+    expect(screen.getByText("Next run: 2026-08-30T12:00:00Z")).toBeInTheDocument();
+  });
+
+  it("removes an existing schedule", async () => {
+    mockedListSources.mockResolvedValue({
+      data: [existingSource],
+      pagination: { next_cursor: null, has_more: false },
+    });
+    mockedGetSource.mockResolvedValue({
+      ...existingSource,
+      schedule: {
+        id: "schedule-1",
+        source_id: existingSource.id,
+        interval_minutes: 60,
+        is_active: true,
+        next_run_at: "2026-08-30T12:00:00Z",
+        last_run_at: null,
+        created_at: "2026-08-30T11:00:00Z",
+        updated_at: "2026-08-30T11:00:00Z",
+      },
+    });
+    mockedDeleteSourceSchedule.mockResolvedValue();
+
+    render(<SourcesPanel token="test-token" />);
+
+    expect(await screen.findByRole("button", { name: "Remove schedule" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Remove schedule" }));
+
+    await waitFor(() => {
+      expect(mockedDeleteSourceSchedule).toHaveBeenCalledWith({
+        token: "test-token",
+        sourceId: existingSource.id,
+      });
+    });
+
+    expect(await screen.findByText("No schedule configured")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Remove schedule" })).not.toBeInTheDocument();
+  });
+
+  it("saves a 15-minute schedule for a source", async () => {
+    mockedListSources.mockResolvedValue({
+      data: [existingSource],
+      pagination: { next_cursor: null, has_more: false },
+    });
+    mockedUpsertSourceSchedule.mockResolvedValue({
+      id: "schedule-1",
+      source_id: existingSource.id,
+      interval_minutes: 15,
+      is_active: true,
+      next_run_at: "2026-08-30T12:15:00Z",
+      last_run_at: null,
+      created_at: "2026-08-30T12:00:00Z",
+      updated_at: "2026-08-30T12:00:00Z",
+    });
+
+    render(<SourcesPanel token="test-token" />);
+
+    await screen.findByText(existingSource.url);
+    fireEvent.click(screen.getByRole("button", { name: "Save schedule" }));
+
+    await waitFor(() => {
+      expect(mockedUpsertSourceSchedule).toHaveBeenCalledWith({
+        token: "test-token",
+        sourceId: existingSource.id,
+        intervalMinutes: 15,
+      });
+    });
   });
 
   it("pauses an active source and shows the resume action", async () => {

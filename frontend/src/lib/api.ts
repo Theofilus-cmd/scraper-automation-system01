@@ -1,4 +1,4 @@
-import type { PaginatedResponse, RegisterResponse, Run, Source, TokenResponse, TriggeredRun, User } from "./types";
+import type { PaginatedResponse, RegisterResponse, Run, Schedule, Source, SourceDetails, TokenResponse, TriggeredRun, User } from "./types";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -140,6 +140,45 @@ export function listRuns(input: {
   });
 
   return request(`/api/v1/runs?${searchParams.toString()}`, {}, input.token);
+}
+
+export function getSource(input: {
+  token: string;
+  sourceId: string;
+}): Promise<SourceDetails> {
+  return request(`/api/v1/sources/${input.sourceId}`, {}, input.token);
+}
+
+export function upsertSourceSchedule(input: {
+  token: string;
+  sourceId: string;
+  intervalMinutes: number;
+  isActive?: boolean;
+}): Promise<Schedule> {
+  return request(
+    `/api/v1/sources/${input.sourceId}/schedule`,
+    {
+      method: "PUT",
+      body: JSON.stringify({
+        interval_minutes: input.intervalMinutes,
+        is_active: input.isActive ?? true,
+      }),
+    },
+    input.token,
+  );
+}
+
+export async function deleteSourceSchedule(input: {
+  token: string;
+  sourceId: string;
+}): Promise<void> {
+  await request<unknown>(
+    `/api/v1/sources/${input.sourceId}/schedule`,
+    {
+      method: "DELETE",
+    },
+    input.token,
+  );
 }
 
 export function updateSourceStatus(input: {

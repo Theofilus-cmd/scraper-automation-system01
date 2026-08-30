@@ -42,6 +42,21 @@ export type Source = {
   updated_at: string | null;
 };
 
+export type Schedule = {
+  id: string;
+  source_id: string;
+  interval_minutes: number;
+  is_active: boolean;
+  next_run_at: string | null;
+  last_run_at: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+};
+
+export type SourceDetails = Source & {
+  schedule: Schedule | null;
+};
+
 export type Pagination = {
   next_cursor: string | null;
   has_more: boolean;
