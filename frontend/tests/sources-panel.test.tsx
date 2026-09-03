@@ -154,7 +154,8 @@ describe("SourcesPanel", () => {
     render(<SourcesPanel token="test-token" />);
 
     expect(await screen.findByText("Runs every 60 minutes")).toBeInTheDocument();
-    expect(screen.getByText("Next run: 2026-08-30T12:00:00Z")).toBeInTheDocument();
+    expect(screen.getByText(/Next run:/)).toBeInTheDocument();
+    expect(screen.queryByText("2026-08-30T12:00:00Z")).not.toBeInTheDocument();
   });
 
   it("removes an existing schedule", async () => {

@@ -45,6 +45,19 @@ function formatStatus(status: string): string {
     .join(" ");
 }
 
+function formatDateTime(value: string): string {
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  }).format(date);
+}
+
 function isRunInProgress(status: RunStatus | null): boolean {
   return status === "queued" || status === "pending" || status === "running";
 }
@@ -506,7 +519,9 @@ export function SourcesPanel({ token }: SourcesPanelProps) {
                         Runs every {schedule.interval_minutes} minutes
                       </p>
                       {schedule.next_run_at ? (
-                        <p className="muted">Next run: {schedule.next_run_at}</p>
+                        <p className="muted">
+                          Next run: {formatDateTime(schedule.next_run_at)}
+                        </p>
                       ) : null}
                     </>
                   ) : (
