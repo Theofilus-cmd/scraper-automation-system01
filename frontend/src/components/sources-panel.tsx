@@ -557,6 +557,7 @@ export function SourcesPanel({ token }: SourcesPanelProps) {
 
                   {source.status !== "archived" ? (
                     <button
+                      className="source-action-button source-action-secondary"
                       disabled={isUpdatingSource}
                       onClick={() =>
                         void handleSourceStatusChange(
@@ -576,6 +577,7 @@ export function SourcesPanel({ token }: SourcesPanelProps) {
 
                   {source.status === "archived" ? (
                     <button
+                      className="source-action-button source-action-secondary"
                       disabled={isUpdatingSource}
                       onClick={() => void handleUnarchiveSource(source)}
                       type="button"
@@ -584,6 +586,7 @@ export function SourcesPanel({ token }: SourcesPanelProps) {
                     </button>
                   ) : (
                     <button
+                      className="source-action-button source-action-danger"
                       disabled={isUpdatingSource}
                       onClick={() => void handleArchiveSource(source)}
                       type="button"
@@ -617,6 +620,7 @@ export function SourcesPanel({ token }: SourcesPanelProps) {
                   </label>
 
                   <button
+                    className="source-action-button source-action-secondary"
                     disabled={
                       source.status === "archived" ||
                       isUpdatingSource ||
@@ -632,6 +636,7 @@ export function SourcesPanel({ token }: SourcesPanelProps) {
 
                   {schedule ? (
                     <button
+                      className="source-action-button source-action-danger"
                       disabled={
                         source.status === "archived" ||
                         isUpdatingSource ||
@@ -647,6 +652,7 @@ export function SourcesPanel({ token }: SourcesPanelProps) {
                   ) : null}
 
                   <button
+                    className="source-action-button source-action-primary"
                     disabled={isRunDisabled || source.status === "archived"}
                     onClick={() => void handleRunNow(source)}
                     type="button"

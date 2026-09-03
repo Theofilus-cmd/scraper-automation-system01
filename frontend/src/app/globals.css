@@ -336,14 +336,14 @@ form > button,
 }
 
 .source-card {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 1rem;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(13rem, 15rem) minmax(8.5rem, 10rem);
+  align-items: start;
+  gap: 1.25rem;
   border: 1px solid #dbe4f0;
-  border-radius: 0.75rem;
+  border-radius: 0.9rem;
   background: #ffffff;
-  padding: 1rem;
+  padding: 1.25rem;
 }
 
 .source-card a {
@@ -356,8 +356,20 @@ form > button,
   margin: 0.45rem 0 0;
 }
 
+.source-card-details {
+  min-width: 0;
+}
+
+.source-card-actions {
+  display: grid;
+  gap: 0.65rem;
+  align-content: start;
+  padding-left: 1.25rem;
+  border-left: 1px solid #e2e8f0;
+}
+
 .status {
-  flex: 0 0 auto;
+  justify-self: start;
   border-radius: 999px;
   padding: 0.28rem 0.6rem;
   font-size: 0.8rem;
@@ -379,9 +391,105 @@ form > button,
   color: #475569;
 }
 
-@media (max-width: 600px) {
-  .panel-heading,
+.schedule-control {
+  display: grid;
+  gap: 0.45rem;
+  padding: 0.9rem;
+  border: 1px solid #dbe4f0;
+  border-radius: 0.7rem;
+  background: #f8fafc;
+  color: #263755;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.schedule-control select {
+  width: 100%;
+  border: 1px solid #b9c6d8;
+  border-radius: 0.45rem;
+  background: #ffffff;
+  color: #14213d;
+  padding: 0.55rem 0.6rem;
+  font: inherit;
+}
+
+.schedule-control select:focus {
+  outline: 3px solid rgb(37 99 235 / 0.2);
+  border-color: #2563eb;
+}
+
+.source-action-button {
+  width: 100%;
+  border: 1px solid transparent;
+  border-radius: 0.55rem;
+  padding: 0.65rem 0.8rem;
+  font-weight: 700;
+}
+
+.source-action-primary {
+  background: #2563eb;
+  color: #ffffff;
+}
+
+.source-action-primary:hover:not(:disabled) {
+  background: #1d4ed8;
+}
+
+.source-action-secondary {
+  border-color: #b9c6d8;
+  background: #ffffff;
+  color: #263755;
+}
+
+.source-action-secondary:hover:not(:disabled) {
+  border-color: #2563eb;
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
+.source-action-danger {
+  border-color: #fecaca;
+  background: #fff1f2;
+  color: #b91c1c;
+}
+
+.source-action-danger:hover:not(:disabled) {
+  border-color: #ef4444;
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.source-card-actions > button:focus-visible,
+.schedule-control select:focus-visible {
+  outline: 3px solid rgb(37 99 235 / 0.25);
+  outline-offset: 2px;
+}
+
+.source-action-danger:focus-visible {
+  outline-color: rgb(220 38 38 / 0.25);
+}
+
+.source-card-actions > button:disabled,
+.schedule-control select:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+@media (max-width: 760px) {
   .source-card {
+    grid-template-columns: 1fr;
+  }
+
+  .source-card-actions {
+    padding-top: 1rem;
+    padding-left: 0;
+    border-top: 1px solid #e2e8f0;
+    border-left: 0;
+  }
+}
+
+@media (max-width: 600px) {
+  .panel-heading {
     flex-direction: column;
   }
 
@@ -393,39 +501,15 @@ form > button,
   .panel-heading > button {
     width: 100%;
   }
-}
 
-.source-card-details {
-  min-width: 0;
-}
+  .source-card-actions {
+    grid-template-columns: 1fr 1fr;
+  }
 
-.source-card-actions {
-  display: grid;
-  justify-items: end;
-  gap: 0.65rem;
-}
-
-.source-card-actions > button {
-  border: 0;
-  border-radius: 0.55rem;
-  background: #2563eb;
-  color: #ffffff;
-  padding: 0.6rem 0.8rem;
-  font-weight: 700;
-}
-
-.source-card-actions > button:hover:not(:disabled) {
-  background: #1d4ed8;
-}
-
-.source-card-actions > button:focus-visible {
-  outline: 3px solid rgb(37 99 235 / 0.25);
-  outline-offset: 2px;
-}
-
-.source-card-actions > button:disabled {
-  cursor: wait;
-  opacity: 0.65;
+  .source-card-actions .status,
+  .source-card-actions .schedule-control {
+    grid-column: 1 / -1;
+  }
 }
 
 .run-status,
