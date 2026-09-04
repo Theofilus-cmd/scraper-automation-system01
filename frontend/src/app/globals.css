@@ -513,7 +513,8 @@ form > button,
 }
 
 .run-status,
-.run-error {
+.run-error,
+.run-success {
   margin: 0.65rem 0 0;
   line-height: 1.45;
 }
@@ -526,6 +527,12 @@ form > button,
 
 .run-error {
   color: #991b1b;
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+.run-success {
+  color: #166534;
   font-size: 0.9rem;
   font-weight: 700;
 }

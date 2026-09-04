@@ -191,6 +191,7 @@ describe("SourcesPanel", () => {
     });
 
     expect(await screen.findByText("No schedule configured")).toBeInTheDocument();
+    expect(await screen.findByText("Schedule removed.")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Remove schedule" })).not.toBeInTheDocument();
   });
 
@@ -222,6 +223,8 @@ describe("SourcesPanel", () => {
         intervalMinutes: 15,
       });
     });
+
+    expect(await screen.findByText("Schedule saved.")).toBeInTheDocument();
   });
 
   it("pauses an active source and shows the resume action", async () => {

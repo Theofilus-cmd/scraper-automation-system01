@@ -73,6 +73,7 @@ export function SourcesPanel({ token }: SourcesPanelProps) {
   const [scheduleIntervalBySourceId, setScheduleIntervalBySourceId] = useState<Record<string, number>>({});
   const [schedulesBySourceId, setSchedulesBySourceId] = useState<Record<string, Schedule | null>>({});
   const [sourceActionErrors, setSourceActionErrors] = useState<Record<string, string>>({});
+  const [sourceActionSuccesses, setSourceActionSuccesses] = useState<Record<string, string>>({});
   const [runsBySourceId, setRunsBySourceId] = useState<Record<string, SourceRunState>>(
     {},
   );
@@ -229,6 +230,26 @@ export function SourcesPanel({ token }: SourcesPanelProps) {
     }
   }
 
+  function clearSourceActionMessages(sourceId: string) {
+    setSourceActionErrors((current) => {
+      const next = { ...current };
+      delete next[sourceId];
+      return next;
+    });
+    setSourceActionSuccesses((current) => {
+      const next = { ...current };
+      delete next[sourceId];
+      return next;
+    });
+  }
+
+  function setSourceActionSuccess(sourceId: string, message: string) {
+    setSourceActionSuccesses((current) => ({
+      ...current,
+      [sourceId]: message,
+    }));
+  }
+
   async function handleArchiveSource(source: Source) {
     if (!window.confirm(`Archive ${source.url}? Scheduled runs will be disabled.`)) {
       return;
@@ -322,11 +343,7 @@ export function SourcesPanel({ token }: SourcesPanelProps) {
     const intervalMinutes = scheduleIntervalBySourceId[source.id] ?? 15;
 
     setIsSavingScheduleSourceId(source.id);
-    setSourceActionErrors((current) => {
-      const next = { ...current };
-      delete next[source.id];
-      return next;
-    });
+    clearSourceActionMessages(source.id);
 
     try {
       const schedule = await upsertSourceSchedule({
@@ -338,6 +355,7 @@ export function SourcesPanel({ token }: SourcesPanelProps) {
         ...current,
         [source.id]: schedule,
       }));
+      setSourceActionSuccess(source.id, "Schedule saved.");
     } catch (error) {
       setSourceActionErrors((current) => ({
         ...current,
@@ -350,11 +368,7 @@ export function SourcesPanel({ token }: SourcesPanelProps) {
 
   async function handleDeleteSchedule(source: Source) {
     setIsSavingScheduleSourceId(source.id);
-    setSourceActionErrors((current) => {
-      const next = { ...current };
-      delete next[source.id];
-      return next;
-    });
+    clearSourceActionMessages(source.id);
 
     try {
       await deleteSourceSchedule({
@@ -365,6 +379,7 @@ export function SourcesPanel({ token }: SourcesPanelProps) {
         ...current,
         [source.id]: null,
       }));
+      setSourceActionSuccess(source.id, "Schedule removed.");
     } catch (error) {
       setSourceActionErrors((current) => ({
         ...current,
@@ -527,6 +542,12 @@ export function SourcesPanel({ token }: SourcesPanelProps) {
                   ) : (
                     <p className="muted">No schedule configured</p>
                   )}
+
+                  {sourceActionSuccesses[source.id] ? (
+                    <p aria-live="polite" className="run-success" role="status">
+                      {sourceActionSuccesses[source.id]}
+                    </p>
+                  ) : null}
 
                   {runState?.status ? (
                     <p aria-live="polite" className="run-status">
