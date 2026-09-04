@@ -256,11 +256,7 @@ export function SourcesPanel({ token }: SourcesPanelProps) {
     }
 
     setIsUpdatingSourceId(source.id);
-    setSourceActionErrors((current) => {
-      const next = { ...current };
-      delete next[source.id];
-      return next;
-    });
+    clearSourceActionMessages(source.id);
 
     try {
       await archiveSource({ token, sourceId: source.id });
@@ -271,6 +267,7 @@ export function SourcesPanel({ token }: SourcesPanelProps) {
             : currentSource,
         ),
       );
+      setSourceActionSuccess(source.id, "Source archived.");
     } catch (error) {
       setSourceActionErrors((current) => ({
         ...current,
@@ -283,11 +280,7 @@ export function SourcesPanel({ token }: SourcesPanelProps) {
 
   async function handleUnarchiveSource(source: Source) {
     setIsUpdatingSourceId(source.id);
-    setSourceActionErrors((current) => {
-      const next = { ...current };
-      delete next[source.id];
-      return next;
-    });
+    clearSourceActionMessages(source.id);
 
     try {
       const updatedSource = await unarchiveSource({ token, sourceId: source.id });
@@ -296,6 +289,7 @@ export function SourcesPanel({ token }: SourcesPanelProps) {
           currentSource.id === updatedSource.id ? updatedSource : currentSource,
         ),
       );
+      setSourceActionSuccess(source.id, "Source unarchived.");
     } catch (error) {
       setSourceActionErrors((current) => ({
         ...current,
@@ -311,11 +305,7 @@ export function SourcesPanel({ token }: SourcesPanelProps) {
     status: "active" | "paused",
   ) {
     setIsUpdatingSourceId(source.id);
-    setSourceActionErrors((current) => {
-      const next = { ...current };
-      delete next[source.id];
-      return next;
-    });
+    clearSourceActionMessages(source.id);
 
     try {
       const updatedSource = await updateSourceStatus({
@@ -328,6 +318,10 @@ export function SourcesPanel({ token }: SourcesPanelProps) {
         currentSources.map((currentSource) =>
           currentSource.id === updatedSource.id ? updatedSource : currentSource,
         ),
+      );
+      setSourceActionSuccess(
+        source.id,
+        status === "paused" ? "Source paused." : "Source resumed.",
       );
     } catch (error) {
       setSourceActionErrors((current) => ({

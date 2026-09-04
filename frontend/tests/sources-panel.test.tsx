@@ -251,7 +251,41 @@ describe("SourcesPanel", () => {
     });
 
     expect(await screen.findByText("Paused")).toBeInTheDocument();
+    expect(await screen.findByText("Source paused.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Resume" })).toBeInTheDocument();
+  });
+
+  it("resumes a paused source and shows success feedback", async () => {
+    const pausedSource: Source = {
+      ...existingSource,
+      status: "paused",
+    };
+
+    mockedListSources.mockResolvedValue({
+      data: [pausedSource],
+      pagination: { next_cursor: null, has_more: false },
+    });
+    mockedUpdateSourceStatus.mockResolvedValue({
+      ...pausedSource,
+      status: "active",
+    });
+
+    render(<SourcesPanel token="test-token" />);
+
+    await screen.findByText(pausedSource.url);
+    fireEvent.click(screen.getByRole("button", { name: "Resume" }));
+
+    await waitFor(() => {
+      expect(mockedUpdateSourceStatus).toHaveBeenCalledWith({
+        token: "test-token",
+        sourceId: pausedSource.id,
+        status: "active",
+      });
+    });
+
+    expect(await screen.findByText("Active")).toBeInTheDocument();
+    expect(await screen.findByText("Source resumed.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Pause" })).toBeInTheDocument();
   });
 
   it("archives a source and shows the unarchive action", async () => {
@@ -280,6 +314,7 @@ describe("SourcesPanel", () => {
       `Archive ${existingSource.url}? Scheduled runs will be disabled.`,
     );
     expect(await screen.findByText("Archived")).toBeInTheDocument();
+    expect(await screen.findByText("Source archived.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Unarchive" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Run now" })).toBeDisabled();
 
@@ -293,6 +328,7 @@ describe("SourcesPanel", () => {
     });
 
     expect(await screen.findByText("Active")).toBeInTheDocument();
+    expect(await screen.findByText("Source unarchived.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Pause" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Run now" })).toBeEnabled();
   });
