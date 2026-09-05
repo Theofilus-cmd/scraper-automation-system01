@@ -177,13 +177,22 @@ form > button,
   color: #263755;
 }
 
-.form-error {
+.form-error,
+.form-success {
   margin: 0;
   border-radius: 0.55rem;
-  background: #fee2e2;
-  color: #991b1b;
   padding: 0.75rem;
   line-height: 1.4;
+}
+
+.form-error {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.form-success {
+  background: #dcfce7;
+  color: #166534;
 }
 
 .dashboard-panel,

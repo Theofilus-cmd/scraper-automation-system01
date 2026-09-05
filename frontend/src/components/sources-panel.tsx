@@ -66,6 +66,7 @@ export function SourcesPanel({ token }: SourcesPanelProps) {
   const [sources, setSources] = useState<Source[]>([]);
   const [url, setUrl] = useState("");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [createSuccessMessage, setCreateSuccessMessage] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isCreating, setIsCreating] = useState(false);
   const [isUpdatingSourceId, setIsUpdatingSourceId] = useState<string | null>(null);
@@ -211,6 +212,7 @@ export function SourcesPanel({ token }: SourcesPanelProps) {
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setErrorMessage(null);
+    setCreateSuccessMessage(null);
     setIsCreating(true);
 
     try {
@@ -223,6 +225,7 @@ export function SourcesPanel({ token }: SourcesPanelProps) {
         return [source, ...withoutExisting];
       });
       setUrl("");
+      setCreateSuccessMessage("Source added.");
     } catch (error) {
       setErrorMessage(messageFor(error));
     } finally {
@@ -488,6 +491,12 @@ export function SourcesPanel({ token }: SourcesPanelProps) {
           {isCreating ? "Adding…" : "Add source"}
         </button>
       </form>
+
+      {createSuccessMessage ? (
+        <p aria-live="polite" className="form-success" role="status">
+          {createSuccessMessage}
+        </p>
+      ) : null}
 
       {errorMessage ? (
         <p aria-live="polite" className="form-error" role="alert">

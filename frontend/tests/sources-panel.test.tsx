@@ -431,6 +431,7 @@ describe("SourcesPanel", () => {
     });
 
     expect(await screen.findByText(addedSource.url)).toBeInTheDocument();
+    expect(await screen.findByText("Source added.")).toBeInTheDocument();
     expect(urlInput).toHaveValue("");
   });
 
