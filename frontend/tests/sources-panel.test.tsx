@@ -227,6 +227,47 @@ describe("SourcesPanel", () => {
     expect(await screen.findByText("Schedule saved.")).toBeInTheDocument();
   });
 
+  it("clears source action feedback when starting a run", async () => {
+    mockedListSources.mockResolvedValue({
+      data: [existingSource],
+      pagination: { next_cursor: null, has_more: false },
+    });
+    mockedUpsertSourceSchedule.mockResolvedValue({
+      id: "schedule-1",
+      source_id: existingSource.id,
+      interval_minutes: 15,
+      is_active: true,
+      next_run_at: "2026-08-30T12:15:00Z",
+      last_run_at: null,
+      created_at: "2026-08-30T12:00:00Z",
+      updated_at: "2026-08-30T12:00:00Z",
+    });
+    mockedTriggerSourceRun.mockResolvedValue({
+      run_id: runningRun.id,
+      task_id: "task-1",
+      status: "pending",
+    });
+    mockedGetRun.mockResolvedValue(runningRun);
+
+    render(<SourcesPanel token="test-token" />);
+
+    await screen.findByText(existingSource.url);
+    fireEvent.click(screen.getByRole("button", { name: "Save schedule" }));
+    expect(await screen.findByText("Schedule saved.")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Run now" }));
+
+    await waitFor(() => {
+      expect(mockedTriggerSourceRun).toHaveBeenCalledWith({
+        token: "test-token",
+        sourceId: existingSource.id,
+      });
+    });
+
+    expect(screen.queryByText("Schedule saved.")).not.toBeInTheDocument();
+    expect(await screen.findByText(/Latest run: Running/)).toBeInTheDocument();
+  });
+
   it("pauses an active source and shows the resume action", async () => {
     mockedListSources.mockResolvedValue({
       data: [existingSource],

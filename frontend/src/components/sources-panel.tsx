@@ -385,6 +385,8 @@ export function SourcesPanel({ token }: SourcesPanelProps) {
   }
 
   async function handleRunNow(source: Source) {
+    clearSourceActionMessages(source.id);
+
     setRunsBySourceId((current) => ({
       ...current,
       [source.id]: {
