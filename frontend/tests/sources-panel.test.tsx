@@ -435,6 +435,42 @@ describe("SourcesPanel", () => {
     expect(urlInput).toHaveValue("");
   });
 
+  it("keeps the URL and shows an error when adding a source fails", async () => {
+    mockedListSources.mockResolvedValue({
+      data: [existingSource],
+      pagination: { next_cursor: null, has_more: false },
+    });
+    mockedCreateSource.mockRejectedValue(
+      new ApiError("This product URL is not supported.", 422),
+    );
+
+    render(<SourcesPanel token="test-token" />);
+
+    await screen.findByText(existingSource.url);
+
+    const urlInput = screen.getByLabelText("Product URL");
+    fireEvent.change(urlInput, {
+      target: { value: addedSource.url },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Add source" }));
+
+    await waitFor(() => {
+      expect(mockedCreateSource).toHaveBeenCalledWith({
+        token: "test-token",
+        url: addedSource.url,
+      });
+    });
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "This product URL is not supported.",
+    );
+    expect(urlInput).toHaveValue(addedSource.url);
+    expect(screen.queryByText("Source added.")).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("link", { name: addedSource.url }),
+    ).not.toBeInTheDocument();
+  });
+
   it("triggers a run and shows its latest completed status", async () => {
     mockedListSources.mockResolvedValue({
       data: [existingSource],
