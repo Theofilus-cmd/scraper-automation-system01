@@ -195,6 +195,52 @@ describe("SourcesPanel", () => {
     expect(screen.queryByRole("button", { name: "Remove schedule" })).not.toBeInTheDocument();
   });
 
+  it("keeps a schedule and shows an error when removing it fails", async () => {
+    mockedListSources.mockResolvedValue({
+      data: [existingSource],
+      pagination: { next_cursor: null, has_more: false },
+    });
+    mockedGetSource.mockResolvedValue({
+      ...existingSource,
+      schedule: {
+        id: "schedule-1",
+        source_id: existingSource.id,
+        interval_minutes: 60,
+        is_active: true,
+        next_run_at: "2026-08-30T12:00:00Z",
+        last_run_at: null,
+        created_at: "2026-08-30T11:00:00Z",
+        updated_at: "2026-08-30T11:00:00Z",
+      },
+    });
+    mockedDeleteSourceSchedule.mockRejectedValue(
+      new ApiError("Unable to remove schedule.", 500),
+    );
+
+    render(<SourcesPanel token="test-token" />);
+
+    expect(
+      await screen.findByRole("button", { name: "Remove schedule" }),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Remove schedule" }));
+
+    await waitFor(() => {
+      expect(mockedDeleteSourceSchedule).toHaveBeenCalledWith({
+        token: "test-token",
+        sourceId: existingSource.id,
+      });
+    });
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Unable to remove schedule.",
+    );
+    expect(screen.getByText("Runs every 60 minutes")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Remove schedule" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Schedule removed.")).not.toBeInTheDocument();
+  });
+
   it("saves a 15-minute schedule for a source", async () => {
     mockedListSources.mockResolvedValue({
       data: [existingSource],
