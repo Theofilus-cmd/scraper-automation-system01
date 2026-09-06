@@ -296,6 +296,39 @@ describe("SourcesPanel", () => {
     expect(screen.getByRole("button", { name: "Resume" })).toBeInTheDocument();
   });
 
+  it("keeps an active source and shows an error when pausing fails", async () => {
+    mockedListSources.mockResolvedValue({
+      data: [existingSource],
+      pagination: { next_cursor: null, has_more: false },
+    });
+    mockedUpdateSourceStatus.mockRejectedValue(
+      new ApiError("Unable to pause source.", 500),
+    );
+
+    render(<SourcesPanel token="test-token" />);
+
+    await screen.findByText(existingSource.url);
+    fireEvent.click(screen.getByRole("button", { name: "Pause" }));
+
+    await waitFor(() => {
+      expect(mockedUpdateSourceStatus).toHaveBeenCalledWith({
+        token: "test-token",
+        sourceId: existingSource.id,
+        status: "paused",
+      });
+    });
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Unable to pause source.",
+    );
+    expect(screen.getByText("Active")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Pause" })).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Resume" }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText("Source paused.")).not.toBeInTheDocument();
+  });
+
   it("resumes a paused source and shows success feedback", async () => {
     const pausedSource: Source = {
       ...existingSource,
