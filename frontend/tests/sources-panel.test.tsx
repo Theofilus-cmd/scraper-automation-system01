@@ -273,6 +273,36 @@ describe("SourcesPanel", () => {
     expect(await screen.findByText("Schedule saved.")).toBeInTheDocument();
   });
 
+  it("keeps schedule setup available and shows an error when saving fails", async () => {
+    mockedListSources.mockResolvedValue({
+      data: [existingSource],
+      pagination: { next_cursor: null, has_more: false },
+    });
+    mockedUpsertSourceSchedule.mockRejectedValue(
+      new ApiError("Unable to save schedule.", 500),
+    );
+
+    render(<SourcesPanel token="test-token" />);
+
+    await screen.findByText(existingSource.url);
+    fireEvent.click(screen.getByRole("button", { name: "Save schedule" }));
+
+    await waitFor(() => {
+      expect(mockedUpsertSourceSchedule).toHaveBeenCalledWith({
+        token: "test-token",
+        sourceId: existingSource.id,
+        intervalMinutes: 15,
+      });
+    });
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Unable to save schedule.",
+    );
+    expect(screen.getByText("No schedule configured")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save schedule" })).toBeInTheDocument();
+    expect(screen.queryByText("Schedule saved.")).not.toBeInTheDocument();
+  });
+
   it("clears source action feedback when starting a run", async () => {
     mockedListSources.mockResolvedValue({
       data: [existingSource],
