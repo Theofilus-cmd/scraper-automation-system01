@@ -14,14 +14,30 @@ test inspects the mapped `Table` objects directly and would have failed
 before that fix, without needing a live Postgres to prove it.
 """
 
+from app.db.models.business_data import (
+    BusinessDataRecord,
+    BusinessDataRecordHistory,
+    BusinessDataRun,
+    BusinessDataSchedule,
+    BusinessDataSource,
+)
 from app.db.models.scraping import CurrentObservation, Product, Source
 
 _DATETIME_COLUMNS = {
     Source: ("created_at", "updated_at"),
     Product: ("created_at", "updated_at"),
     CurrentObservation: ("created_at", "updated_at", "scraped_at"),
+    BusinessDataSource: ("created_at", "updated_at"),
+    BusinessDataSchedule: (
+        "created_at",
+        "updated_at",
+        "next_run_at",
+        "last_run_at",
+    ),
+    BusinessDataRun: ("created_at", "started_at", "finished_at"),
+    BusinessDataRecord: ("created_at", "updated_at", "captured_at"),
+    BusinessDataRecordHistory: ("captured_at", "version_created_at"),
 }
-
 
 def test_all_datetime_columns_are_timezone_aware() -> None:
     for model, column_names in _DATETIME_COLUMNS.items():
