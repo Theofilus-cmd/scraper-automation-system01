@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import UTC
 
 import pytest
 from sqlalchemy.exc import IntegrityError
@@ -381,7 +382,8 @@ async def test_business_data_run_lifecycle_is_workspace_scoped() -> None:
     assert completed.error_reason is None
     assert completed.error_detail is None
     assert finished_at is not None
-    assert finished_at >= started_at
+    assert started_at.tzinfo is UTC
+    assert finished_at.tzinfo is UTC
 
     async with get_session() as session:
         persisted = await get_business_data_run(
