@@ -12,10 +12,13 @@ from app.db.models.business_data import (
     BUSINESS_DATA_RUN_TRIGGERED_BY,
     BUSINESS_DATA_SCHEDULE_MAX_INTERVAL_MINUTES,
     BUSINESS_DATA_SCHEDULE_MIN_INTERVAL_MINUTES,
+    BusinessDataRecord,
+    BusinessDataRecordHistory,
     BusinessDataRun,
     BusinessDataSchedule,
     BusinessDataSource,
 )
+
 
 async def create_business_data_source(
     session: AsyncSession,
@@ -179,7 +182,6 @@ async def upsert_business_data_schedule(
     await session.flush()
     await session.refresh(schedule)
     return schedule
-
 
 BUSINESS_DATA_RUN_TERMINAL_STATUSES = (
     "completed",
@@ -347,7 +349,6 @@ async def finish_business_data_run(
     )
     if run is None or run.status != "running":
         return None
-
     run.status = status
     run.total_records = total_records
     run.succeeded_records = succeeded_records
@@ -358,3 +359,227 @@ async def finish_business_data_run(
     await session.flush()
     await session.refresh(run)
     return run
+
+
+def _business_data_fields_diff(
+    previous_fields: dict[str, object],
+    current_fields: dict[str, object],
+) -> dict[str, dict[str, object]]:
+    """Return per-field before/after values for a changed record."""
+
+    changes: dict[str, dict[str, object]] = {}
+
+    for field_name in sorted(set(previous_fields) | set(current_fields)):
+        previous_value = previous_fields.get(field_name)
+        current_value = current_fields.get(field_name)
+
+        if previous_value != current_value:
+            changes[field_name] = {
+                "before": previous_value,
+                "after": current_value,
+            }
+
+    return changes
+
+
+async def get_business_data_record(
+    session: AsyncSession,
+    record_id: uuid.UUID,
+    *,
+    workspace_id: uuid.UUID,
+) -> BusinessDataRecord | None:
+    """Return a record only when its source belongs to the workspace."""
+
+    return (
+        await session.execute(
+            select(BusinessDataRecord)
+            .join(
+                BusinessDataSource,
+                BusinessDataSource.id
+                == BusinessDataRecord.business_data_source_id,
+            )
+            .where(
+                BusinessDataRecord.id == record_id,
+                BusinessDataSource.workspace_id == workspace_id,
+            )
+        )
+    ).scalar_one_or_none()
+
+
+async def list_business_data_records(
+    session: AsyncSession,
+    source_id: uuid.UUID,
+    *,
+    workspace_id: uuid.UUID,
+    after: tuple[datetime, uuid.UUID] | None,
+    limit: int,
+) -> list[BusinessDataRecord]:
+    """List current records of a workspace-owned source, newest first."""
+
+    source = await get_business_data_source(
+        session,
+        source_id,
+        workspace_id=workspace_id,
+    )
+    if source is None:
+        return []
+
+    query = (
+        select(BusinessDataRecord)
+        .where(BusinessDataRecord.business_data_source_id == source.id)
+        .order_by(BusinessDataRecord.updated_at.desc(), BusinessDataRecord.id.desc())
+        .limit(limit)
+    )
+
+    if after is not None:
+        after_updated_at, after_id = after
+        query = query.where(
+            (BusinessDataRecord.updated_at < after_updated_at)
+            | (
+                (BusinessDataRecord.updated_at == after_updated_at)
+                & (BusinessDataRecord.id < after_id)
+            )
+        )
+
+    return list((await session.execute(query)).scalars().all())
+
+
+async def list_business_data_record_history(
+    session: AsyncSession,
+    record_id: uuid.UUID,
+    *,
+    workspace_id: uuid.UUID,
+    after: tuple[datetime, uuid.UUID] | None,
+    limit: int,
+) -> list[BusinessDataRecordHistory]:
+    """List append-only history for a workspace-owned record, newest first."""
+
+    record = await get_business_data_record(
+        session,
+        record_id,
+        workspace_id=workspace_id,
+    )
+    if record is None:
+        return []
+
+    query = (
+        select(BusinessDataRecordHistory)
+        .where(BusinessDataRecordHistory.business_data_record_id == record.id)
+        .order_by(
+            BusinessDataRecordHistory.version_created_at.desc(),
+            BusinessDataRecordHistory.id.desc(),
+        )
+        .limit(limit)
+    )
+
+    if after is not None:
+        after_created_at, after_id = after
+        query = query.where(
+            (
+                BusinessDataRecordHistory.version_created_at
+                < after_created_at
+            )
+            | (
+                (
+                    BusinessDataRecordHistory.version_created_at
+                    == after_created_at
+                )
+                & (BusinessDataRecordHistory.id < after_id)
+            )
+        )
+
+    return list((await session.execute(query)).scalars().all())
+
+
+async def upsert_business_data_record(
+    session: AsyncSession,
+    source_id: uuid.UUID,
+    *,
+    workspace_id: uuid.UUID,
+    run_id: uuid.UUID,
+    external_id: str,
+    fields: dict[str, object],
+    captured_at: datetime,
+) -> tuple[BusinessDataRecord, BusinessDataRecordHistory | None] | None:
+    """Upsert a current record and append history only for new or changed fields."""
+
+    source = await get_business_data_source(
+        session,
+        source_id,
+        workspace_id=workspace_id,
+    )
+    if source is None:
+        return None
+
+    run = await get_business_data_run(
+        session,
+        run_id,
+        workspace_id=workspace_id,
+    )
+    if run is None or run.business_data_source_id != source.id:
+        return None
+
+    record = (
+        await session.execute(
+            select(BusinessDataRecord)
+            .where(
+                BusinessDataRecord.business_data_source_id == source.id,
+                BusinessDataRecord.external_id == external_id,
+            )
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+
+    history: BusinessDataRecordHistory | None = None
+
+    if record is None:
+        record = BusinessDataRecord(
+            business_data_source_id=source.id,
+            external_id=external_id,
+            fields=fields,
+            captured_at=captured_at,
+            last_run_id=run.id,
+        )
+        session.add(record)
+        await session.flush()
+
+        history = BusinessDataRecordHistory(
+            business_data_record_id=record.id,
+            business_data_run_id=run.id,
+            fields=fields,
+            change_summary=None,
+            captured_at=captured_at,
+            version_created_at=_utcnow(),
+        )
+        session.add(history)
+    else:
+        changed = record.fields != fields
+        change_summary = (
+            _business_data_fields_diff(record.fields, fields)
+            if changed
+            else None
+        )
+
+        record.fields = fields
+        record.captured_at = captured_at
+        record.last_run_id = run.id
+        record.updated_at = _utcnow()
+
+        if changed:
+            history = BusinessDataRecordHistory(
+                business_data_record_id=record.id,
+                business_data_run_id=run.id,
+                fields=fields,
+                change_summary=change_summary,
+                captured_at=captured_at,
+                version_created_at=_utcnow(),
+            )
+            session.add(history)
+
+    await session.flush()
+    await session.refresh(record)
+
+    if history is not None:
+        await session.refresh(history)
+
+    return record, history
