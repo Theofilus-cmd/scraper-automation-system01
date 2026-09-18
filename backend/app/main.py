@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1.auth import router as auth_router
+from app.api.v1.business_data import router as business_data_router
 from app.api.v1.error_mapping import domain_error_handler
 from app.api.v1.products import router as products_router
 from app.api.v1.runs import router as runs_router
@@ -55,6 +56,7 @@ def create_app() -> FastAPI:
     # source/run/product lifecycle (doc 18 §6).
     app.include_router(health_router)
     app.include_router(auth_router, prefix="/api/v1")
+    app.include_router(business_data_router, prefix="/api/v1")
     app.include_router(sources_router, prefix="/api/v1")
     app.include_router(runs_router, prefix="/api/v1")
     app.include_router(products_router, prefix="/api/v1")
