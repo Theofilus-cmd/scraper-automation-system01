@@ -15,7 +15,10 @@ from app.api.v1.pagination import DEFAULT_LIMIT, clamp_limit, decode_cursor_or_4
 from app.db.models.business_data_repository import (
     create_business_data_run,
     create_business_data_source,
+    get_business_data_record,
     get_business_data_source,
+    list_business_data_record_history,
+    list_business_data_records,
     list_business_data_runs,
     list_business_data_sources,
 )
@@ -89,6 +92,31 @@ def _run_to_dict(run: Any) -> dict[str, Any]:
         "started_at": _iso(run.started_at),
         "finished_at": _iso(run.finished_at),
         "created_at": _iso(run.created_at),
+    }
+
+
+def _record_to_dict(record: Any) -> dict[str, Any]:
+    return {
+        "id": str(record.id),
+        "source_id": str(record.business_data_source_id),
+        "external_id": record.external_id,
+        "fields": record.fields,
+        "captured_at": _iso(record.captured_at),
+        "last_run_id": str(record.last_run_id),
+        "created_at": _iso(record.created_at),
+        "updated_at": _iso(record.updated_at),
+    }
+
+
+def _record_history_to_dict(history: Any) -> dict[str, Any]:
+    return {
+        "id": str(history.id),
+        "record_id": str(history.business_data_record_id),
+        "run_id": str(history.business_data_run_id),
+        "fields": history.fields,
+        "change_summary": history.change_summary,
+        "captured_at": _iso(history.captured_at),
+        "version_created_at": _iso(history.version_created_at),
     }
 
 
@@ -261,4 +289,99 @@ async def list_business_data_runs_endpoint(
         limit=effective_limit,
         cursor_of=lambda run: (run.created_at, run.id),
         serialize=_run_to_dict,
+    )
+
+
+@router.get("/{source_id}/records")
+async def list_business_data_records_endpoint(
+    source_id: uuid.UUID,
+    current_workspace: CurrentWorkspace,
+    cursor: str | None = None,
+    limit: int = DEFAULT_LIMIT,
+) -> dict[str, Any]:
+    """List current normalized records for one owned business-data source."""
+
+    after = decode_cursor_or_422(cursor)
+    effective_limit = clamp_limit(limit)
+
+    async with get_session() as session:
+        source = await get_business_data_source(
+            session,
+            source_id,
+            workspace_id=current_workspace.id,
+        )
+        if source is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Business data source not found.",
+            )
+
+        rows = await list_business_data_records(
+            session,
+            source_id,
+            workspace_id=current_workspace.id,
+            after=after,
+            limit=effective_limit + 1,
+        )
+
+    return paginated_response(
+        rows,
+        limit=effective_limit,
+        cursor_of=lambda record: (record.updated_at, record.id),
+        serialize=_record_to_dict,
+    )
+
+
+@router.get("/{source_id}/records/{record_id}/history")
+async def list_business_data_record_history_endpoint(
+    source_id: uuid.UUID,
+    record_id: uuid.UUID,
+    current_workspace: CurrentWorkspace,
+    cursor: str | None = None,
+    limit: int = DEFAULT_LIMIT,
+) -> dict[str, Any]:
+    """List append-only history snapshots for one owned business-data record."""
+
+    after = decode_cursor_or_422(cursor)
+    effective_limit = clamp_limit(limit)
+
+    async with get_session() as session:
+        source = await get_business_data_source(
+            session,
+            source_id,
+            workspace_id=current_workspace.id,
+        )
+        if source is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Business data source not found.",
+            )
+
+        record = await get_business_data_record(
+            session,
+            record_id,
+            workspace_id=current_workspace.id,
+        )
+        if (
+            record is None
+            or record.business_data_source_id != source.id
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Business data record not found.",
+            )
+
+        rows = await list_business_data_record_history(
+            session,
+            record_id,
+            workspace_id=current_workspace.id,
+            after=after,
+            limit=effective_limit + 1,
+        )
+
+    return paginated_response(
+        rows,
+        limit=effective_limit,
+        cursor_of=lambda history: (history.version_created_at, history.id),
+        serialize=_record_history_to_dict,
     )

@@ -321,3 +321,254 @@ def test_ingest_rejects_source_with_in_flight_run(
     assert response.json()["detail"] == (
         "Business data source already has a run in progress."
     )
+
+
+def test_records_and_history_show_current_data_and_changes(
+    client: TestClient,
+) -> None:
+    source = _create_source(client)
+    source_id = str(source["id"])
+
+    first_ingest = client.post(
+        f"/api/v1/business-data/sources/{source_id}/ingest",
+        json={
+            "triggered_by": "upload",
+            "items": [
+                {
+                    "external_id": "SKU-HISTORY-001",
+                    "fields": {
+                        "name": "Kopi Arabica",
+                        "stock": 10,
+                        "price": 75000,
+                    },
+                    "captured_at": "2026-09-22T09:00:00+07:00",
+                }
+            ],
+        },
+    )
+    assert first_ingest.status_code == 200
+    assert first_ingest.json()["status"] == "completed"
+
+    second_ingest = client.post(
+        f"/api/v1/business-data/sources/{source_id}/ingest",
+        json={
+            "triggered_by": "upload",
+            "items": [
+                {
+                    "external_id": "SKU-HISTORY-001",
+                    "fields": {
+                        "name": "Kopi Arabica",
+                        "stock": 5,
+                        "price": 75000,
+                    },
+                    "captured_at": "2026-09-22T09:10:00+07:00",
+                }
+            ],
+        },
+    )
+    assert second_ingest.status_code == 200
+    assert second_ingest.json()["status"] == "completed"
+
+    records_response = client.get(
+        f"/api/v1/business-data/sources/{source_id}/records",
+    )
+    assert records_response.status_code == 200
+
+    records_body = records_response.json()
+    assert records_body["pagination"] == {
+        "next_cursor": None,
+        "has_more": False,
+    }
+    assert len(records_body["data"]) == 1
+
+    record = records_body["data"][0]
+    assert set(record) == {
+        "id",
+        "source_id",
+        "external_id",
+        "fields",
+        "captured_at",
+        "last_run_id",
+        "created_at",
+        "updated_at",
+    }
+    assert record["source_id"] == source_id
+    assert record["external_id"] == "SKU-HISTORY-001"
+    assert record["fields"] == {
+        "name": "Kopi Arabica",
+        "stock": 5,
+        "price": 75000,
+    }
+    assert record["captured_at"] == "2026-09-22T02:10:00+00:00"
+    assert record["last_run_id"] == second_ingest.json()["run_id"]
+    assert record["created_at"] is not None
+    assert record["updated_at"] is not None
+
+    history_response = client.get(
+        f"/api/v1/business-data/sources/{source_id}/records/{record['id']}/history",
+    )
+    assert history_response.status_code == 200
+
+    history_body = history_response.json()
+    assert history_body["pagination"] == {
+        "next_cursor": None,
+        "has_more": False,
+    }
+    assert len(history_body["data"]) == 2
+
+    newest, oldest = history_body["data"]
+    assert set(newest) == {
+        "id",
+        "record_id",
+        "run_id",
+        "fields",
+        "change_summary",
+        "captured_at",
+        "version_created_at",
+    }
+    assert newest["record_id"] == record["id"]
+    assert newest["run_id"] == second_ingest.json()["run_id"]
+    assert newest["fields"]["stock"] == 5
+    assert newest["captured_at"] == "2026-09-22T02:10:00+00:00"
+    assert newest["change_summary"] == {
+        "stock": {
+            "before": 10,
+            "after": 5,
+        }
+    }
+    assert newest["version_created_at"] is not None
+
+    assert oldest["record_id"] == record["id"]
+    assert oldest["run_id"] == first_ingest.json()["run_id"]
+    assert oldest["fields"]["stock"] == 10
+    assert oldest["captured_at"] == "2026-09-22T02:00:00+00:00"
+    assert oldest["change_summary"] is None
+    assert oldest["version_created_at"] is not None
+
+
+def test_record_read_routes_return_404_for_unknown_or_mismatched_resources(
+    client: TestClient,
+) -> None:
+    unknown_source_id = uuid.uuid4()
+    unknown_record_id = uuid.uuid4()
+
+    unknown_source_response = client.get(
+        f"/api/v1/business-data/sources/{unknown_source_id}/records",
+    )
+    assert unknown_source_response.status_code == 404
+    assert unknown_source_response.json()["detail"] == (
+        "Business data source not found."
+    )
+
+    source = _create_source(client)
+    source_id = str(source["id"])
+
+    unknown_record_response = client.get(
+        f"/api/v1/business-data/sources/{source_id}/records/{unknown_record_id}/history",
+    )
+    assert unknown_record_response.status_code == 404
+    assert unknown_record_response.json()["detail"] == (
+        "Business data record not found."
+    )
+
+    first_ingest = client.post(
+        f"/api/v1/business-data/sources/{source_id}/ingest",
+        json={
+            "items": [
+                {
+                    "external_id": "SKU-MISMATCH",
+                    "fields": {"name": "Record milik source pertama"},
+                    "captured_at": "2026-09-22T10:00:00+07:00",
+                }
+            ]
+        },
+    )
+    assert first_ingest.status_code == 200
+
+    records_response = client.get(
+        f"/api/v1/business-data/sources/{source_id}/records",
+    )
+    assert records_response.status_code == 200
+    record_id = records_response.json()["data"][0]["id"]
+
+    another_source = _create_source(client)
+    another_source_id = str(another_source["id"])
+
+    mismatch_response = client.get(
+        f"/api/v1/business-data/sources/{another_source_id}/records/{record_id}/history",
+    )
+    assert mismatch_response.status_code == 404
+    assert mismatch_response.json()["detail"] == (
+        "Business data record not found."
+    )
+
+
+async def _create_isolated_business_data_record() -> tuple[str, str]:
+    from datetime import UTC, datetime
+
+    from sqlalchemy import select
+
+    from app.db.models.business_data import BusinessDataSource
+    from app.db.models.business_data_repository import (
+        create_business_data_run,
+        upsert_business_data_record,
+    )
+    from app.db.session import get_session
+
+    source_id = uuid.UUID(await _create_isolated_business_data_source())
+
+    async with get_session() as session:
+        source = await session.scalar(
+            select(BusinessDataSource).where(BusinessDataSource.id == source_id)
+        )
+        assert source is not None
+
+        run = await create_business_data_run(
+            session,
+            source.id,
+            workspace_id=source.workspace_id,
+            triggered_by="upload",
+        )
+        assert run is not None
+
+        persisted = await upsert_business_data_record(
+            session,
+            source.id,
+            workspace_id=source.workspace_id,
+            run_id=run.id,
+            external_id="SKU-OTHER-WORKSPACE",
+            fields={"name": "Private record", "stock": 1},
+            captured_at=datetime(2026, 9, 22, 3, 30, tzinfo=UTC),
+        )
+        assert persisted is not None
+
+        record, _history = persisted
+        await session.commit()
+        return str(source.id), str(record.id)
+
+
+def test_workspace_cannot_read_other_business_data_records_or_history(
+    client: TestClient,
+) -> None:
+    from app.workers.async_bridge import run_async
+
+    other_source_id, other_record_id = run_async(
+        _create_isolated_business_data_record()
+    )
+
+    records_response = client.get(
+        f"/api/v1/business-data/sources/{other_source_id}/records",
+    )
+    assert records_response.status_code == 404
+    assert records_response.json()["detail"] == (
+        "Business data source not found."
+    )
+
+    history_response = client.get(
+        f"/api/v1/business-data/sources/{other_source_id}/records/"
+        f"{other_record_id}/history",
+    )
+    assert history_response.status_code == 404
+    assert history_response.json()["detail"] == (
+        "Business data source not found."
+    )
