@@ -170,6 +170,29 @@ async def list_business_data_sources_endpoint(
     )
 
 
+
+@router.get("/{source_id}")
+async def get_business_data_source_endpoint(
+    source_id: uuid.UUID,
+    current_workspace: CurrentWorkspace,
+) -> dict[str, Any]:
+    """Get one business-data source owned by the authenticated workspace."""
+
+    async with get_session() as session:
+        source = await get_business_data_source(
+            session,
+            source_id,
+            workspace_id=current_workspace.id,
+        )
+        if source is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Business data source not found.",
+            )
+
+    return _source_to_dict(source)
+
+
 @router.post("/{source_id}/ingest")
 async def ingest_business_data_endpoint(
     source_id: uuid.UUID,

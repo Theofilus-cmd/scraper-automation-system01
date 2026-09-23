@@ -572,3 +572,38 @@ def test_workspace_cannot_read_other_business_data_records_or_history(
     assert history_response.json()["detail"] == (
         "Business data source not found."
     )
+
+def test_get_business_data_source_returns_owned_source(
+    client: TestClient,
+) -> None:
+    source = _create_source(client)
+    source_id = str(source["id"])
+
+    response = client.get(f"/api/v1/business-data/sources/{source_id}")
+
+    assert response.status_code == 200
+    assert response.json() == source
+
+
+def test_get_business_data_source_returns_404_for_unknown_or_other_workspace(
+    client: TestClient,
+) -> None:
+    unknown_response = client.get(
+        f"/api/v1/business-data/sources/{uuid.uuid4()}",
+    )
+    assert unknown_response.status_code == 404
+    assert unknown_response.json()["detail"] == (
+        "Business data source not found."
+    )
+
+    from app.workers.async_bridge import run_async
+
+    other_source_id = run_async(_create_isolated_business_data_source())
+
+    foreign_response = client.get(
+        f"/api/v1/business-data/sources/{other_source_id}",
+    )
+    assert foreign_response.status_code == 404
+    assert foreign_response.json()["detail"] == (
+        "Business data source not found."
+    )
