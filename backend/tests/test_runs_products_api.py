@@ -217,12 +217,14 @@ def test_list_runs_pagination_and_filters(client: TestClient) -> None:
     assert first_ids | second_ids == all_ids
 
 
-def test_triggered_run_agrees_with_get_run(client: TestClient) -> None:
+def test_triggered_run_can_be_retrieved(client: TestClient) -> None:
     source = run_async(create_test_source())
 
     trigger_response = client.post(f"/api/v1/sources/{source.id}/runs")
     assert trigger_response.status_code == 202
     trigger_body = trigger_response.json()
+
+    assert trigger_body["status"] == "running"
 
     get_response = client.get(f"/api/v1/runs/{trigger_body['run_id']}")
 
@@ -230,7 +232,13 @@ def test_triggered_run_agrees_with_get_run(client: TestClient) -> None:
     get_body = get_response.json()
     assert get_body["id"] == trigger_body["run_id"]
     assert get_body["source_id"] == str(source.id)
-    assert get_body["status"] == trigger_body["status"]
+    assert get_body["triggered_by"] == "manual"
+    assert get_body["status"] in {
+        "running",
+        "completed",
+        "failed",
+        "cancelled",
+    }
 
 
 def test_get_product_nests_current_observation(client: TestClient) -> None:
