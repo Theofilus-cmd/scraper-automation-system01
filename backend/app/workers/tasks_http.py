@@ -38,7 +38,11 @@ from celery.exceptions import MaxRetriesExceededError
 from sqlalchemy import select
 
 from app.core.logging import get_logger
-from app.db.models.lifecycle import TASK_TRANSIENT_REASONS, Run
+from app.db.models.lifecycle import (
+    TASK_TERMINAL_STATUSES,
+    TASK_TRANSIENT_REASONS,
+    Run,
+)
 from app.db.models.lifecycle import Task as TaskRow
 from app.db.models.repository import upsert_scrape_result
 from app.db.models.scraping import Source
@@ -127,14 +131,25 @@ async def _load_task_context(task_id: uuid.UUID) -> _TaskContext | None:
     )
 
 
-async def _mark_task_started(task_id: uuid.UUID, *, attempt: int) -> None:
+async def _mark_task_started(task_id: uuid.UUID, *, attempt: int) -> bool:
+    """Mark one non-terminal task in progress, or reject a redelivery."""
+
     async with get_session() as session:
-        task = (await session.execute(select(TaskRow).where(TaskRow.id == task_id))).scalar_one()
+        task = (
+            await session.execute(
+                select(TaskRow).where(TaskRow.id == task_id).with_for_update()
+            )
+        ).scalar_one()
+
+        if task.status in TASK_TERMINAL_STATUSES:
+            return False
+
         task.status = "in_progress"
         task.attempt_count = attempt
         if task.started_at is None:
             task.started_at = _utcnow()
         await session.commit()
+        return True
 
 
 async def _mark_task_retrying(task_id: uuid.UUID, *, reason: str, message: str) -> None:
@@ -165,14 +180,26 @@ async def _finalize_task(
     """
     now = _utcnow()
     async with get_session() as session:
-        task = (await session.execute(select(TaskRow).where(TaskRow.id == task_id))).scalar_one()
+        task = (
+            await session.execute(
+                select(TaskRow).where(TaskRow.id == task_id).with_for_update()
+            )
+        ).scalar_one()
+
+        if task.status in TASK_TERMINAL_STATUSES:
+            return
+
         task.status = task_status
         task.finished_at = now
         if error_reason is not None:
             task.error_reason = error_reason
             task.error_detail = error_detail
 
-        run = (await session.execute(select(Run).where(Run.id == run_id))).scalar_one()
+        run = (
+            await session.execute(
+                select(Run).where(Run.id == run_id).with_for_update()
+            )
+        ).scalar_one()
         run.status = run_status
         run.finished_at = now
         if run_status == "completed":
@@ -242,7 +269,13 @@ async def _scrape_source_url_for_task(task_id: uuid.UUID, *, attempt: int) -> di
         logger.error("scrape task row not found", extra={"task_id": str(task_id)})
         return {"status": "failed", "error_reason": "task_not_found"}
 
-    await _mark_task_started(task_id, attempt=attempt)
+    started = await _mark_task_started(task_id, attempt=attempt)
+    if not started:
+        logger.info(
+            "scrape task already finalized",
+            extra={"task_id": str(task_id), "queue": "http"},
+        )
+        return {"status": "already_finalized"}
 
     if context.source_status == "archived":
         # doc 18 §3.2's documented race: archived after this task was

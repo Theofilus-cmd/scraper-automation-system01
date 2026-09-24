@@ -33,9 +33,14 @@ container's real Compose network:
     docker compose exec api pytest -m integration
 """
 
+import uuid
 from typing import Any
 
 import pytest
+from sqlalchemy import func, select
+
+from app.db.models.lifecycle import ObservationHistory, Run, Task
+from app.db.session import get_session
 
 from app.workers.async_bridge import run_async
 from app.workers.tasks_http import scrape_source_url
@@ -103,3 +108,59 @@ def test_sequential_calls_survive_a_failure_in_between() -> None:
     assert failed["status"] == "failed"
     assert failed["error_reason"] == "missing_required_field"
     assert ok_again["status"] == "completed"
+
+def test_sequential_redelivery_of_terminal_task_is_a_no_op() -> None:
+    """A post-lease-expiry redelivery cannot rewrite a terminal task/run."""
+
+    async def _setup() -> tuple[str, uuid.UUID, uuid.UUID]:
+        source = await create_test_source(
+            url=f"{MOCK_STORE_BASE_URL}/products/widget-in-stock"
+        )
+        run = await create_test_run(source.id)
+        task = await create_test_task(run.id, source.id)
+        return str(task.id), run.id, task.id
+
+    async def _durable_state(
+        run_id: uuid.UUID,
+        task_id: uuid.UUID,
+    ) -> tuple[str, int, str, int, int, int]:
+        async with get_session() as session:
+            run = (
+                await session.execute(select(Run).where(Run.id == run_id))
+            ).scalar_one()
+            task = (
+                await session.execute(select(Task).where(Task.id == task_id))
+            ).scalar_one()
+            history_count = await session.scalar(
+                select(func.count())
+                .select_from(ObservationHistory)
+                .where(ObservationHistory.task_id == task_id)
+            )
+
+        return (
+            task.status,
+            task.attempt_count,
+            run.status,
+            run.succeeded_tasks,
+            run.failed_tasks,
+            int(history_count),
+        )
+
+    task_id, run_id, task_uuid = run_async(_setup())
+
+    first = scrape_source_url(task_id)
+    state_after_first = run_async(_durable_state(run_id, task_uuid))
+    second = scrape_source_url(task_id)
+    state_after_second = run_async(_durable_state(run_id, task_uuid))
+
+    assert first["status"] == "completed"
+    assert second == {"status": "already_finalized"}
+    assert state_after_first == (
+        "succeeded",
+        1,
+        "completed",
+        1,
+        0,
+        state_after_first[-1],
+    )
+    assert state_after_second == state_after_first
