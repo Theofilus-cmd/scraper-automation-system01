@@ -19,6 +19,7 @@ individual tests for why each is still deterministic despite that.
 """
 
 import uuid
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -95,11 +96,12 @@ def test_trigger_run_collision_returns_409_with_matching_run_id(client: TestClie
     """
     source = run_async(create_test_source())
 
-    first_response = client.post(f"/api/v1/sources/{source.id}/runs")
-    assert first_response.status_code == 202
-    first_run_id = first_response.json()["run_id"]
+    with patch("app.db.models.runs_repository._dispatch"):
+        first_response = client.post(f"/api/v1/sources/{source.id}/runs")
+        assert first_response.status_code == 202
+        first_run_id = first_response.json()["run_id"]
 
-    second_response = client.post(f"/api/v1/sources/{source.id}/runs")
+        second_response = client.post(f"/api/v1/sources/{source.id}/runs")
 
     assert second_response.status_code == 409
     body = second_response.json()

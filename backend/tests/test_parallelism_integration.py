@@ -17,14 +17,15 @@ import asyncio
 import uuid
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from unittest.mock import patch
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import func, select
 
-from app.db.models.lifecycle import Run
+from app.db.models.lifecycle import Run, Schedule
 from app.db.models.repository import upsert_scrape_result
 from app.db.models.runs_repository import claim_due_schedules, create_manual_run
-from app.db.models.scraping import CurrentObservation, Product
+from app.db.models.scraping import CurrentObservation, Product, Source
 from app.db.models.sources_repository import upsert_schedule
 from app.db.session import get_session
 from app.domain.errors import RunInProgressError
@@ -51,17 +52,40 @@ async def test_concurrent_scheduler_claims_never_double_fire() -> None:
     for source in sources:
         await _force_schedule_due(source.id)
 
-    claimed_counts = await asyncio.gather(
-        claim_due_schedules(batch_size=20), claim_due_schedules(batch_size=20)
-    )
+    async with get_session() as session:
+        due_count = await session.scalar(
+            select(func.count())
+            .select_from(Schedule)
+            .join(Source, Source.id == Schedule.source_id)
+            .where(
+                Schedule.next_run_at <= datetime.now(UTC),
+                Schedule.is_active.is_(True),
+                Source.status == "active",
+                ~select(Run.id)
+                .where(
+                    Run.source_id == Schedule.source_id,
+                    Run.status.in_(("pending", "running")),
+                )
+                .exists(),
+            )
+        )
 
-    assert sum(claimed_counts) == len(sources)
+    assert due_count is not None
+    assert due_count >= len(sources)
+
+    with patch("app.db.models.runs_repository._dispatch"):
+        await asyncio.gather(
+            claim_due_schedules(batch_size=due_count),
+            claim_due_schedules(batch_size=due_count),
+        )
+
     async with get_session() as session:
         for source in sources:
             runs = (
                 await session.execute(select(Run).where(Run.source_id == source.id))
             ).scalars().all()
             assert len(runs) == 1
+            assert runs[0].triggered_by == "schedule"
 
 
 async def test_no_overlap_invariant_under_real_concurrent_manual_triggers() -> None:
