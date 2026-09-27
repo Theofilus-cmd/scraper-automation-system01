@@ -93,3 +93,28 @@ async def release_task_execution_lease(
     except Exception as exc:
         raise CoordinationUnavailableError("could not release task execution lease") from exc
     return bool(result)
+
+
+_RENEW_IF_OWNER_SCRIPT = """
+if redis.call("GET", KEYS[1]) == ARGV[1] then
+    return redis.call("PEXPIRE", KEYS[1], ARGV[2])
+end
+return 0
+"""
+
+
+async def renew_task_execution_lease(
+    lease: TaskExecutionLease, *, client: TaskExecutionRedisClient
+) -> bool:
+    """Extend this lease only while its owner token still matches."""
+    try:
+        result = await client.eval(
+            _RENEW_IF_OWNER_SCRIPT,
+            1,
+            lease.key,
+            lease.token,
+            str(lease.ttl_seconds * 1000),
+        )
+    except Exception as exc:
+        raise CoordinationUnavailableError("could not renew task execution lease") from exc
+    return bool(result)

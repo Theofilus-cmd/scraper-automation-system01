@@ -104,3 +104,57 @@ async def test_release_wraps_redis_failure_as_coordination_unavailable() -> None
 
     with pytest.raises(CoordinationUnavailableError, match="could not release"):
         await release_task_execution_lease(lease, client=client)
+
+
+async def test_renew_lease_uses_owner_checked_lua() -> None:
+    from app.workers.coordination import TaskExecutionLease, renew_task_execution_lease
+
+    class Redis:
+        async def eval(self, script: str, numkeys: int, *args: str) -> int:
+            assert numkeys == 1
+            assert args == ("scraper:task-execution:test", "owner-token", "60000")
+            assert 'redis.call("GET", KEYS[1]) == ARGV[1]' in script
+            assert 'redis.call("PEXPIRE", KEYS[1], ARGV[2])' in script
+            return 1
+
+    lease = TaskExecutionLease(
+        key="scraper:task-execution:test",
+        token="owner-token",
+        ttl_seconds=60,
+    )
+    assert await renew_task_execution_lease(lease, client=Redis()) is True
+
+
+async def test_renew_lease_rejects_lost_ownership() -> None:
+    from app.workers.coordination import TaskExecutionLease, renew_task_execution_lease
+
+    class Redis:
+        async def eval(self, script: str, numkeys: int, *args: str) -> int:
+            return 0
+
+    lease = TaskExecutionLease(
+        key="scraper:task-execution:test",
+        token="old-token",
+        ttl_seconds=60,
+    )
+    assert await renew_task_execution_lease(lease, client=Redis()) is False
+
+
+async def test_renew_lease_wraps_redis_failure() -> None:
+    from app.workers.coordination import (
+        CoordinationUnavailableError,
+        TaskExecutionLease,
+        renew_task_execution_lease,
+    )
+
+    class Redis:
+        async def eval(self, script: str, numkeys: int, *args: str) -> int:
+            raise ConnectionError("redis down")
+
+    lease = TaskExecutionLease(
+        key="scraper:task-execution:test",
+        token="owner-token",
+        ttl_seconds=60,
+    )
+    with pytest.raises(CoordinationUnavailableError, match="renew"):
+        await renew_task_execution_lease(lease, client=Redis())
