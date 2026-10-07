@@ -211,7 +211,21 @@ async def test_changed_field_appends_history_row_with_diff_only() -> None:
     assert second.product_id is not None
     history = await _history_rows_for_product(second.product_id)
     assert len(history) == 2
-    latest = history[-1]
+
+    first_rows = [
+        row for row in history
+        if row.run_id == run.id and row.task_id == task.id
+    ]
+    second_rows = [
+        row for row in history
+        if row.run_id == run2_id and row.task_id == task2_id
+    ]
+    assert len(first_rows) == 1
+    assert len(second_rows) == 1
+    assert first_rows[0].change_summary is None
+
+    latest = second_rows[0]
+    assert latest.price == Decimal("17.49")
     assert latest.change_summary is not None
     assert set(latest.change_summary.keys()) == {"price"}
     assert latest.change_summary["price"] == {"from": "19.99", "to": "17.49"}

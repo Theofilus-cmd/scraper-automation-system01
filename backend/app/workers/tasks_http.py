@@ -28,13 +28,13 @@ untouched, per every prior phase's convention.
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from celery import Task as CeleryTask
-from celery.exceptions import MaxRetriesExceededError
 from sqlalchemy import select
 
 from app.core.logging import get_logger
@@ -56,10 +56,13 @@ from app.workers.async_bridge import run_async
 from app.workers.celery_app import typed_bound_task, typed_task
 from app.workers.coordination import (
     CoordinationUnavailableError,
+    LeaseOwnershipLostError,
+    TaskExecutionLease,
     TaskExecutionRedisClient,
     acquire_task_execution_lease,
     get_task_execution_redis_client,
     release_task_execution_lease,
+    renew_task_execution_lease,
 )
 
 logger = get_logger(__name__)
@@ -98,6 +101,15 @@ class TransientScrapeError(Exception):
         super().__init__(message)
 
 
+
+class AttemptBudgetExhaustedError(Exception):
+    """No durable attempt remains; do not start another pipeline."""
+
+    def __init__(self, reason: str, message: str) -> None:
+        self.reason = reason
+        super().__init__(message)
+
+
 def _utcnow() -> datetime:
     return datetime.now(UTC)
 
@@ -132,7 +144,11 @@ async def _load_task_context(task_id: uuid.UUID) -> _TaskContext | None:
 
 
 async def _mark_task_started(task_id: uuid.UUID, *, attempt: int) -> bool:
-    """Mark one non-terminal task in progress, or reject a redelivery."""
+    """Reserve a durable attempt, or reject terminal/exhausted work.
+
+    The message's attempt is retained in the signature for compatibility;
+    the locked database counter is authoritative.
+    """
 
     async with get_session() as session:
         task = (
@@ -144,21 +160,61 @@ async def _mark_task_started(task_id: uuid.UUID, *, attempt: int) -> bool:
         if task.status in TASK_TERMINAL_STATUSES:
             return False
 
+        if task.attempt_count >= task.max_attempts:
+            detail = task.error_detail or {}
+            message = str(detail.get("message") or "durable attempt budget exhausted")
+            raise AttemptBudgetExhaustedError(
+                task.error_reason or "network_error", message
+            )
+
         task.status = "in_progress"
-        task.attempt_count = attempt
+        task.attempt_count += 1
         if task.started_at is None:
             task.started_at = _utcnow()
         await session.commit()
         return True
 
 
-async def _mark_task_retrying(task_id: uuid.UUID, *, reason: str, message: str) -> None:
+async def _task_attempt_budget_exhausted(task_id: uuid.UUID) -> bool:
+    """Read the durable budget after the current fetch attempt fails."""
     async with get_session() as session:
-        task = (await session.execute(select(TaskRow).where(TaskRow.id == task_id))).scalar_one()
+        row = (
+            await session.execute(
+                select(TaskRow.attempt_count, TaskRow.max_attempts).where(
+                    TaskRow.id == task_id
+                )
+            )
+        ).one()
+        return bool(row.attempt_count >= row.max_attempts)
+
+
+async def _mark_task_retrying(
+    task_id: uuid.UUID,
+    *,
+    reason: str,
+    message: str,
+    retry_delay: float = 0,
+) -> bool:
+    async with get_session() as session:
+        task = (
+            await session.execute(
+                select(TaskRow).where(TaskRow.id == task_id).with_for_update()
+            )
+        ).scalar_one()
+        if task.status in TASK_TERMINAL_STATUSES:
+            return False
+        now = _utcnow()
         task.status = "retrying"
+        task.queued_at = now
         task.error_reason = reason
-        task.error_detail = {"message": message}
+        task.error_detail = {
+            "message": message,
+            "retry_not_before": (
+                now + timedelta(seconds=max(0.0, retry_delay))
+            ).isoformat(),
+        }
         await session.commit()
+        return True
 
 
 async def _finalize_task(
@@ -269,7 +325,13 @@ async def _scrape_source_url_for_task(task_id: uuid.UUID, *, attempt: int) -> di
         logger.error("scrape task row not found", extra={"task_id": str(task_id)})
         return {"status": "failed", "error_reason": "task_not_found"}
 
-    started = await _mark_task_started(task_id, attempt=attempt)
+    try:
+        started = await _mark_task_started(task_id, attempt=attempt)
+    except AttemptBudgetExhaustedError as exc:
+        await _finalize_task_dead_letter(
+            task_id, context.run_id, reason=exc.reason, message=str(exc)
+        )
+        return {"status": "failed", "error_reason": exc.reason, "dead_letter": True}
     if not started:
         logger.info(
             "scrape task already finalized",
@@ -303,6 +365,15 @@ async def _scrape_source_url_for_task(task_id: uuid.UUID, *, attempt: int) -> di
         page = await adapter.fetch(context.source_url, FetchContext())
     except FetchError as exc:
         if exc.reason in TASK_TRANSIENT_REASONS:
+            if await _task_attempt_budget_exhausted(task_id):
+                await _finalize_task_dead_letter(
+                    task_id, context.run_id, reason=exc.reason, message=str(exc)
+                )
+                return {
+                    "status": "failed",
+                    "error_reason": exc.reason,
+                    "dead_letter": True,
+                }
             raise TransientScrapeError(exc.reason, str(exc), retry_after=exc.retry_after) from exc
         await _finalize_task_failure(task_id, context.run_id, reason=exc.reason, message=str(exc))
         return {"status": "failed", "error_reason": exc.reason}
@@ -350,6 +421,66 @@ async def _scrape_source_url_for_task(task_id: uuid.UUID, *, attempt: int) -> di
     }
 
 
+async def _run_pipeline_with_lease_renewal(
+    task_id: uuid.UUID,
+    *,
+    attempt: int,
+    lease: TaskExecutionLease,
+    client: TaskExecutionRedisClient,
+    renewal_interval_seconds: float | None = None,
+    renewal_timeout_seconds: float | None = None,
+) -> dict[str, Any]:
+    """Supervise the pipeline and clean up both tasks before returning."""
+    interval = (
+        lease.ttl_seconds / 3
+        if renewal_interval_seconds is None
+        else renewal_interval_seconds
+    )
+    if not 0 < interval < lease.ttl_seconds:
+        raise ValueError("renewal interval must be positive and below lease TTL")
+
+    renewal_timeout = (
+        lease.ttl_seconds / 3
+        if renewal_timeout_seconds is None
+        else renewal_timeout_seconds
+    )
+    if not 0 < renewal_timeout < lease.ttl_seconds - interval:
+        raise ValueError("renewal timeout must fit within remaining lease TTL")
+
+    async def heartbeat() -> None:
+        while True:
+            await asyncio.sleep(interval)
+            try:
+                renewed = await asyncio.wait_for(
+                    renew_task_execution_lease(lease, client=client),
+                    timeout=renewal_timeout,
+                )
+            except TimeoutError as exc:
+                raise CoordinationUnavailableError(
+                    "task execution lease renewal timed out"
+                ) from exc
+            if not renewed:
+                raise LeaseOwnershipLostError("task execution lease ownership lost")
+
+    pipeline = asyncio.create_task(
+        _scrape_source_url_for_task(task_id, attempt=attempt)
+    )
+    renewal = asyncio.create_task(heartbeat())
+    try:
+        done, _ = await asyncio.wait(
+            {pipeline, renewal}, return_when=asyncio.FIRST_COMPLETED
+        )
+        if renewal in done:
+            await renewal
+            raise CoordinationUnavailableError("lease heartbeat stopped unexpectedly")
+        return await pipeline
+    finally:
+        for task in (pipeline, renewal):
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(pipeline, renewal, return_exceptions=True)
+
+
 async def _scrape_source_url_for_task_with_lease(
     task_id: uuid.UUID, *, attempt: int
 ) -> dict[str, Any]:
@@ -380,7 +511,9 @@ async def _scrape_source_url_for_task_with_lease(
             )
             return {"status": "duplicate_execution"}
 
-        return await _scrape_source_url_for_task(task_id, attempt=attempt)
+        return await _run_pipeline_with_lease_renewal(
+            task_id, attempt=attempt, lease=lease, client=client
+        )
     finally:
         if lease is not None:
             try:
@@ -414,10 +547,9 @@ async def _scrape_source_url_for_task_with_lease(
 )
 def scrape_source_url(self: CeleryTask, task_id: str) -> dict[str, Any]:
     """doc 18 §5.2: `max_retries=2` (2 retries + the first attempt =
-    `max_attempts=3`, doc 07 §3). `retry_backoff`/`retry_backoff_max`/
-    `retry_jitter` govern whatever `self.retry()` call below doesn't pass
-    an explicit `countdown` -- i.e. every retry except one honoring a real
-    `Retry-After` header (doc 18 §5.3).
+    `max_attempts=3`, doc 07 §3). Manual retries honor Retry-After
+    when provided; otherwise Celery uses default_retry_delay. Autoretry
+    backoff options do not calculate the delay for this manual handler.
     """
     attempt = self.request.retries + 1
     task_uuid = uuid.UUID(task_id)
@@ -429,11 +561,25 @@ def scrape_source_url(self: CeleryTask, task_id: str) -> dict[str, Any]:
         result: dict[str, Any] = run_async(
             _scrape_source_url_for_task_with_lease(task_uuid, attempt=attempt)
         )
+    except CoordinationUnavailableError as exc:
+        reason = (
+            "lease_lost"
+            if isinstance(exc, LeaseOwnershipLostError)
+            else "coordination_unavailable"
+        )
+        logger.warning(
+            "scrape execution deferred without changing durable task state",
+            extra={
+                "task_id": task_id,
+                "attempt": attempt,
+                "reason": reason,
+                "detail": str(exc),
+                "queue": "http",
+            },
+        )
+        return {"status": "deferred", "reason": reason}
     except TransientScrapeError as exc:
-        run_async(_mark_task_retrying(task_uuid, reason=exc.reason, message=str(exc)))
-        try:
-            raise self.retry(exc=exc, countdown=exc.retry_after)
-        except MaxRetriesExceededError:
+        if self.request.retries >= self.max_retries:
             context = run_async(_load_task_context(task_uuid))
             if context is not None:
                 run_async(
@@ -446,6 +592,26 @@ def scrape_source_url(self: CeleryTask, task_id: str) -> dict[str, Any]:
                 extra={"task_id": task_id, "reason": exc.reason, "attempt": attempt},
             )
             return {"status": "failed", "error_reason": exc.reason, "dead_letter": True}
+
+        retry_delay = max(
+            0.0,
+            float(
+                self.default_retry_delay
+                if exc.retry_after is None
+                else exc.retry_after
+            ),
+        )
+        retrying = run_async(
+            _mark_task_retrying(
+                task_uuid,
+                reason=exc.reason,
+                message=str(exc),
+                retry_delay=retry_delay,
+            )
+        )
+        if not retrying:
+            return {"status": "already_finalized"}
+        raise self.retry(exc=exc, countdown=exc.retry_after) from exc
 
     logger.info("scrape task finished", extra={"task_id": task_id, "status": result.get("status")})
     return result

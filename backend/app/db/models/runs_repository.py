@@ -215,27 +215,58 @@ async def claim_due_schedules(*, batch_size: int) -> int:
 
 
 async def reconciliation_sweep(*, stuck_after: timedelta) -> dict[str, int]:
-    """Requeue stuck tasks and heal old pending runs without a task."""
+    """Requeue stuck tasks without an active lease and heal orphaned runs."""
+    import asyncio
+
+    from app.workers.coordination import (
+        get_task_execution_redis_client,
+        task_execution_lease_exists,
+    )
     cutoff = _utcnow() - stuck_after
     requeued_task_ids: list[uuid.UUID] = []
 
     async with get_session() as session:
         stuck_tasks = (
             await session.execute(
-                select(Task).where(
-                    Task.status.in_(("queued", "in_progress")),
+                select(Task)
+                .where(
+                    Task.status.in_(("queued", "in_progress", "retrying")),
                     Task.queued_at.is_not(None),
                     Task.queued_at < cutoff,
                 )
+                .with_for_update(skip_locked=True)
             )
         ).scalars().all()
 
-        for task in stuck_tasks:
-            task.status = "queued"
-            task.queued_at = _utcnow()
-            requeued_task_ids.append(task.id)
+        client = get_task_execution_redis_client() if stuck_tasks else None
+        try:
+            for task in stuck_tasks:
+                if task.status == "retrying":
+                    detail = task.error_detail or {}
+                    raw_deadline = detail.get("retry_not_before")
+                    if not isinstance(raw_deadline, str):
+                        continue
+                    try:
+                        deadline = datetime.fromisoformat(raw_deadline)
+                    except ValueError:
+                        continue
+                    if deadline.tzinfo is None or deadline >= cutoff:
+                        continue
 
-        await session.commit()
+                assert client is not None
+                if await task_execution_lease_exists(task.id, client=client):
+                    continue
+                task.status = "queued"
+                task.queued_at = _utcnow()
+                requeued_task_ids.append(task.id)
+
+            await session.commit()
+        finally:
+            if client is not None:
+                try:
+                    await asyncio.wait_for(client.aclose(), timeout=5.0)
+                except Exception:
+                    logger.exception("reconciliation Redis client close failed")
 
     for task_id in requeued_task_ids:
         _dispatch(task_id)

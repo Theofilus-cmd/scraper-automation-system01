@@ -54,9 +54,14 @@ async def acquire_domain_rate_slot(
 
     key = f"{_DOMAIN_RATE_KEY_PREFIX}{normalized}"
     try:
-        remaining_ms = int(
-            await client.eval(_ACQUIRE_RATE_SLOT_SCRIPT, 1, key, str(interval_ms))
+        result = await client.eval(
+            _ACQUIRE_RATE_SLOT_SCRIPT, 1, key, str(interval_ms)
         )
+        if isinstance(result, bool) or not isinstance(
+            result, int | str | bytes | bytearray
+        ):
+            raise TypeError("invalid Redis rate slot response type")
+        remaining_ms = int(result)
     except Exception as exc:
         raise CoordinationUnavailableError("could not acquire domain rate slot") from exc
 

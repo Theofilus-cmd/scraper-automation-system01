@@ -168,3 +168,53 @@ async def test_release_error_does_not_replace_scrape_result(
         "status": "completed"
     }
     assert client.closed is True
+
+
+@pytest.mark.parametrize("supervisor_fails", [False, True])
+async def test_lease_wrapper_uses_supervisor_and_cleans_resources(
+    monkeypatch: pytest.MonkeyPatch,
+    task_id: uuid.UUID,
+    lease: TaskExecutionLease,
+    supervisor_fails: bool,
+) -> None:
+    client = FakeTaskExecutionRedisClient()
+    supervised: list[uuid.UUID] = []
+    released: list[TaskExecutionLease] = []
+
+    async def acquire(*args: Any, **kwargs: Any) -> TaskExecutionLease:
+        return lease
+
+    async def supervise(
+        received_id: uuid.UUID, **kwargs: Any
+    ) -> dict[str, Any]:
+        supervised.append(received_id)
+        assert kwargs["attempt"] == 2
+        assert kwargs["lease"] is lease
+        assert kwargs["client"] is client
+        if supervisor_fails:
+            raise CoordinationUnavailableError("supervisor renewal failed")
+        return {"status": "completed"}
+
+    async def release(value: TaskExecutionLease, **kwargs: Any) -> bool:
+        released.append(value)
+        return True
+
+    async def forbidden_pipeline(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        raise AssertionError("wrapper must call supervisor, not pipeline directly")
+
+    monkeypatch.setattr(tasks_http, "get_task_execution_redis_client", lambda: client)
+    monkeypatch.setattr(tasks_http, "acquire_task_execution_lease", acquire)
+    monkeypatch.setattr(tasks_http, "release_task_execution_lease", release)
+    monkeypatch.setattr(tasks_http, "_run_pipeline_with_lease_renewal", supervise)
+    monkeypatch.setattr(tasks_http, "_scrape_source_url_for_task", forbidden_pipeline)
+
+    if supervisor_fails:
+        with pytest.raises(CoordinationUnavailableError, match="supervisor renewal failed"):
+            await tasks_http._scrape_source_url_for_task_with_lease(task_id, attempt=2)
+    else:
+        result = await tasks_http._scrape_source_url_for_task_with_lease(task_id, attempt=2)
+        assert result == {"status": "completed"}
+
+    assert supervised == [task_id]
+    assert released == [lease]
+    assert client.closed is True

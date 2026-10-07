@@ -33,6 +33,10 @@ class CoordinationUnavailableError(Exception):
     """Redis coordination could not safely acquire an execution lease."""
 
 
+class LeaseOwnershipLostError(CoordinationUnavailableError):
+    """This attempt no longer owns the task execution lease."""
+
+
 class TaskExecutionRedisClient(Protocol):
     async def set(
         self, name: str, value: str, *, ex: int, nx: bool
@@ -118,3 +122,31 @@ async def renew_task_execution_lease(
     except Exception as exc:
         raise CoordinationUnavailableError("could not renew task execution lease") from exc
     return bool(result)
+
+
+async def task_execution_lease_exists(
+    task_id: uuid.UUID, *, client: TaskExecutionRedisClient
+) -> bool:
+    """Check lease presence; Redis uncertainty must stop recovery."""
+    import asyncio
+
+    try:
+        result = await asyncio.wait_for(
+            client.eval(
+                'return redis.call("EXISTS", KEYS[1])',
+                1,
+                _lease_key(task_id),
+            ),
+            timeout=5.0,
+        )
+        if isinstance(result, bool) or not isinstance(
+            result, int | str | bytes | bytearray
+        ):
+            raise TypeError("invalid Redis lease existence response type")
+        exists = int(result)
+    except Exception as exc:
+        raise CoordinationUnavailableError("could not check task execution lease") from exc
+
+    if exists not in (0, 1):
+        raise CoordinationUnavailableError("invalid task execution lease existence result")
+    return exists == 1

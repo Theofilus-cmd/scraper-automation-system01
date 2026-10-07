@@ -27,13 +27,13 @@ from app.db.models.repository import upsert_scrape_result
 from app.db.models.scraping import Source
 from app.scraping.types import NormalizedRecord, ValidationResult
 from app.workers.async_bridge import run_async
-
 from tests.factories import (
     create_isolated_workspace_source,
     create_test_run,
     create_test_source,
     create_test_task,
 )
+
 pytestmark = pytest.mark.integration
 
 
@@ -185,6 +185,7 @@ def test_list_runs_pagination_and_filters(client: TestClient) -> None:
         "/api/v1/runs",
         params={"source_id": str(source.id), "status": "completed", "limit": 100},
     )
+    assert by_status.status_code == 200, by_status.text
     assert {row["id"] for row in by_status.json()["data"]} == {str(run_a.id), str(run_c.id)}
 
     by_triggered_by = client.get(

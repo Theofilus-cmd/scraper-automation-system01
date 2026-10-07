@@ -158,3 +158,41 @@ async def test_renew_lease_wraps_redis_failure() -> None:
     )
     with pytest.raises(CoordinationUnavailableError, match="renew"):
         await renew_task_execution_lease(lease, client=Redis())
+
+
+@pytest.mark.parametrize("response", [True, 1.5, None, [], "invalid"])
+async def test_redis_integer_checks_reject_invalid_responses(
+    response: object,
+) -> None:
+    from app.workers.coordination import task_execution_lease_exists
+    from app.workers.domain_rate_limit import acquire_domain_rate_slot
+
+    lease_client = FakeLeaseRedisClient(eval_results=[response])
+    with pytest.raises(CoordinationUnavailableError, match="could not check"):
+        await task_execution_lease_exists(uuid.uuid4(), client=lease_client)
+
+    rate_client = FakeLeaseRedisClient(eval_results=[response])
+    with pytest.raises(CoordinationUnavailableError, match="could not acquire"):
+        await acquire_domain_rate_slot("example.com", client=rate_client)
+
+
+@pytest.mark.parametrize(
+    ("response", "expected"),
+    [(0, 0), (1, 1), ("1", 1), (b"0", 0)],
+)
+async def test_redis_integer_checks_accept_supported_responses(
+    response: object,
+    expected: int,
+) -> None:
+    from app.workers.coordination import task_execution_lease_exists
+    from app.workers.domain_rate_limit import acquire_domain_rate_slot
+
+    lease_client = FakeLeaseRedisClient(eval_results=[response])
+    assert await task_execution_lease_exists(
+        uuid.uuid4(), client=lease_client
+    ) is (expected == 1)
+
+    rate_client = FakeLeaseRedisClient(eval_results=[response])
+    assert await acquire_domain_rate_slot(
+        "example.com", client=rate_client
+    ) == expected / 1000
