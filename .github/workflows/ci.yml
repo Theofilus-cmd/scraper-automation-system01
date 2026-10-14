@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, phase3]
   pull_request:
 
 jobs:
@@ -132,8 +132,49 @@ jobs:
       # backend/Dockerfile), against the rest of the default-profile
       # stack this job already brought up, including worker-http and
       # mock-store (doc 17).
+      - name: Stop scheduler before integration tests
+        run: docker compose stop scheduler
+
       - name: Run integration tests
         run: docker compose exec -T api pytest -m integration
+
+      - name: Restart scheduler and verify heartbeat
+        shell: bash
+        run: |
+          set -euo pipefail
+          since="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          docker compose start scheduler
+          for attempt in $(seq 1 20); do
+            logs="$(docker compose logs --since="$since" --no-color scheduler)"
+            if printf '%s\n' "$logs" | python3 -c '
+          import json
+          import sys
+
+          healthy = False
+          for line in sys.stdin:
+              _, separator, payload = line.partition("|")
+              if not separator:
+                  continue
+              try:
+                  record = json.loads(payload.strip())
+              except json.JSONDecodeError:
+                  continue
+              if (
+                  record.get("message") == "scheduler heartbeat"
+                  and record.get("db_ok") is True
+                  and record.get("redis_ok") is True
+              ):
+                  healthy = True
+          sys.exit(0 if healthy else 1)
+          '; then
+              echo "Scheduler heartbeat confirms DB and Redis connectivity."
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "Scheduler did not emit a healthy heartbeat before timeout."
+          docker compose logs --since="$since" --no-color scheduler
+          exit 1
 
       - name: Show logs on failure
         if: failure()
