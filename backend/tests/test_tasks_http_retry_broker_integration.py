@@ -20,11 +20,29 @@ from tests.factories import (
 pytestmark = pytest.mark.integration
 
 
-def test_real_broker_retries_503_then_finishes_once() -> None:
+@pytest.mark.parametrize(
+    ("scenario", "expected_state"),
+    [
+        pytest.param(
+            "retry-test",
+            ("succeeded", 2, "completed", 1, 0, 1),
+            id="503-then-success",
+        ),
+        pytest.param(
+            "dead-letter-test",
+            ("dead_letter", 3, "failed", 0, 1, 0),
+            id="persistent-503-dead-letter",
+        ),
+    ],
+)
+def test_real_broker_retry_outcomes(
+    scenario: str,
+    expected_state: tuple[str, int, str, int, int, int],
+) -> None:
     async def setup() -> tuple[uuid.UUID, uuid.UUID]:
         token = uuid.uuid4().hex
         source = await create_test_source(
-            url=f"{MOCK_STORE_BASE_URL}/products/retry-test-{token}"
+            url=f"{MOCK_STORE_BASE_URL}/products/{scenario}-{token}"
         )
         run = await create_test_run(source.id)
         task = await create_test_task(run.id, source.id)
@@ -70,4 +88,4 @@ def test_real_broker_retries_503_then_finishes_once() -> None:
             f"Broker retry did not finish within 60 seconds: {last_state!r}"
         )
 
-    assert last_state == ("succeeded", 2, "completed", 1, 0, 1)
+    assert last_state == expected_state

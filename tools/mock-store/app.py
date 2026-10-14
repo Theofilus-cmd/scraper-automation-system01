@@ -171,6 +171,13 @@ _MAX_RETRY_FIXTURES = 256
 
 @app.get("/products/{slug}", response_class=HTMLResponse)
 async def product_page(slug: str) -> str:
+    if re.fullmatch(r"dead-letter-test-[0-9a-f]{32}", slug):
+        raise HTTPException(
+            status_code=503,
+            detail="controlled persistent failure",
+            headers={"Retry-After": "2"},
+        )
+
     match = re.fullmatch(r"retry-test-([0-9a-f]{32})", slug)
     if match is not None:
         token = match.group(1)
