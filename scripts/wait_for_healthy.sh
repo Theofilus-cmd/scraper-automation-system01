@@ -46,7 +46,8 @@ for svc in services:
     if health in ("", "healthy"):
         continue
 
-    not_ready.append(f"{name} (health={health or \"none\"}, state={state})")
+    health_label = health or "none"
+    not_ready.append(f"{name} (health={health_label}, state={state})")
 
 print("\n".join(not_ready))
 ')"
