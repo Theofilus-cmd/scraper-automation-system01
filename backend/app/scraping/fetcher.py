@@ -24,8 +24,10 @@ services (Postgres/Redis/etc. are never in this list).
 from __future__ import annotations
 
 import ipaddress
+import math
 import socket
 from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from urllib.parse import urljoin, urlparse
 
 import httpx
@@ -48,13 +50,10 @@ class FetchError(Exception):
     name for. `reason` is one of that column's values, e.g.
     "dns_or_ssrf_blocked", "timeout", "network_error".
 
-    `retry_after` (doc 18 §5.3, Phase 2): populated only for a 429/503
-    response that carried a `Retry-After` header in the (far more common)
-    delay-in-seconds form -- the HTTP-date form is deliberately not parsed
-    here (flagged, not silently mishandled: a date-form header just leaves
-    this `None`, and the caller falls back to Celery's own backoff+jitter,
-    which is always a safe, correct default). `None` for every other
-    reason/response shape, including a 429/503 with no such header.
+    `retry_after` (doc 18 §5.3): populated only for a 429/503 response
+    carrying a usable `Retry-After` delay or HTTP-date. Past dates produce
+    a zero delay. Missing or invalid headers leave this `None`, allowing
+    the caller to use its configured retry policy.
     """
 
     def __init__(self, reason: str, message: str, *, retry_after: float | None = None) -> None:
@@ -63,16 +62,25 @@ class FetchError(Exception):
         super().__init__(message)
 
 
-def _parse_retry_after_seconds(header_value: str | None) -> float | None:
+def _parse_retry_after_seconds(
+    header_value: str | None, *, now: datetime | None = None
+) -> float | None:
+    """Return a non-negative delay; None means the header is unusable."""
     if not header_value:
         return None
+    value = header_value.strip()
     try:
-        seconds = float(header_value.strip())
+        seconds = float(value)
     except ValueError:
-        # HTTP-date form (e.g. "Wed, 21 Oct 2026 07:28:00 GMT") -- not
-        # parsed here, see FetchError's docstring.
-        return None
-    return seconds if seconds >= 0 else None
+        try:
+            retry_at = parsedate_to_datetime(value)
+        except (ValueError, TypeError, OverflowError):
+            return None
+        if retry_at.tzinfo is None:
+            retry_at = retry_at.replace(tzinfo=UTC)
+        current_time = now if now is not None else datetime.now(UTC)
+        return max(0.0, (retry_at - current_time).total_seconds())
+    return seconds if math.isfinite(seconds) and seconds >= 0 else None
 
 
 def _is_blocked_address(ip: str) -> bool:
