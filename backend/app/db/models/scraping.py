@@ -23,6 +23,7 @@ than being duplicated onto `current_observations`.
 """
 
 from __future__ import annotations
+
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -32,8 +33,16 @@ import uuid
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import CHAR, CheckConstraint, ForeignKey, Index, Numeric, Text, UniqueConstraint, text
-
+from sqlalchemy import (
+    CHAR,
+    CheckConstraint,
+    ForeignKey,
+    Index,
+    Numeric,
+    Text,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -82,7 +91,7 @@ class Source(Base):
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default="active")
     created_at: Mapped[datetime] = mapped_column(nullable=False, server_default=text("now()"))
     updated_at: Mapped[datetime] = mapped_column(nullable=False, server_default=text("now()"))
-    workspace: Mapped["Workspace"] = relationship(back_populates="sources")
+    workspace: Mapped[Workspace] = relationship(back_populates="sources")
     products: Mapped[list[Product]] = relationship(back_populates="source")
 
 

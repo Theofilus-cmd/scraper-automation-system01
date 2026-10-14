@@ -32,7 +32,8 @@ def create_access_token(*, subject: str) -> str:
     settings = get_settings()
     if not settings.jwt_secret_key:
         raise RuntimeError(
-            "JWT_SECRET_KEY is not configured. Set a cryptographically random secret in the environment."
+            "JWT_SECRET_KEY is not configured. "
+            "Set a cryptographically random secret in the environment."
         )
 
     expires_at = datetime.now(UTC) + timedelta(minutes=settings.access_token_expire_minutes)

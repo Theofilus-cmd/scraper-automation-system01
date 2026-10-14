@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Iterable
+
 from app.db.models.business_data_repository import (
     finish_business_data_run,
     get_business_data_run,

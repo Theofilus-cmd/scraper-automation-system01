@@ -41,7 +41,6 @@ from sqlalchemy import func, select
 
 from app.db.models.lifecycle import ObservationHistory, Run, Task
 from app.db.session import get_session
-
 from app.workers.async_bridge import run_async
 from app.workers.tasks_http import scrape_source_url
 from tests.factories import (

@@ -7,6 +7,7 @@ from datetime import UTC
 
 import pytest
 from sqlalchemy.exc import IntegrityError
+
 from app.db.models.business_data_repository import (
     create_business_data_run,
     create_business_data_source,
@@ -19,7 +20,6 @@ from app.db.models.business_data_repository import (
     mark_business_data_run_running,
     upsert_business_data_schedule,
 )
-
 from app.db.models.identity import User, Workspace
 from app.db.session import get_session
 

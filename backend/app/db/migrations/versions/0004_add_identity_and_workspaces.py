@@ -31,7 +31,7 @@ depends_on: str | Sequence[str] | None = None
 
 LEGACY_USER_EMAIL = "legacy-owner@local.invalid"
 
-LEGACY_USER_PASSWORD_HASH = "$argon2id$v=19$m=65536,t=3,p=4$pmk41EnHEyqMVikk+lYyRw$X+kpRnApgsvxi5K1Mkfm736bsmslClPI+wfrnBIgu/A"
+LEGACY_USER_PASSWORD_HASH = "$argon2id$v=19$m=65536,t=3,p=4$pmk41EnHEyqMVikk+lYyRw$X+kpRnApgsvxi5K1Mkfm736bsmslClPI+wfrnBIgu/A"  # noqa: E501
 LEGACY_WORKSPACE_SLUG = "legacy-workspace"
 
 

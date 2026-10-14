@@ -7,14 +7,12 @@ from typing import Annotated
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from sqlalchemy.ext.asyncio import AsyncSession
-
-from app.core.security import InvalidTokenError, decode_access_token
-from app.db.models.identity_repository import get_user_by_id
-from app.db.session import get_session
 from sqlalchemy import select
 
+from app.core.security import InvalidTokenError, decode_access_token
 from app.db.models.identity import User, Workspace, WorkspaceMember
+from app.db.models.identity_repository import get_user_by_id
+from app.db.session import get_session
 
 bearer_scheme = HTTPBearer(auto_error=False)
 
