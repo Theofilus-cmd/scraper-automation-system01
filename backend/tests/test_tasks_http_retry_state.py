@@ -84,7 +84,7 @@ def test_entry_point_does_not_retry_an_already_finalized_task(
         assert received_id == task_id
         assert reason == "network_error"
         assert message == "fetch failed"
-        assert retry_delay == float(tasks_http.scrape_source_url.default_retry_delay)
+        assert retry_delay == 0.5
         return False
 
     def forbidden_retry(*args: object, **kwargs: object) -> None:
@@ -93,6 +93,12 @@ def test_entry_point_does_not_retry_an_already_finalized_task(
     monkeypatch.setattr(tasks_http, "run_async", run_async)
     monkeypatch.setattr(tasks_http, "_scrape_source_url_for_task_with_lease", fail)
     monkeypatch.setattr(tasks_http, "_mark_task_retrying", already_finalized)
+    monkeypatch.setattr(
+        tasks_http, "_read_task_attempt_count", AsyncMock(return_value=1)
+    )
+    monkeypatch.setattr(
+        tasks_http, "calculate_retry_delay", lambda **kwargs: 0.5
+    )
     monkeypatch.setattr(tasks_http.scrape_source_url, "retry", forbidden_retry)
 
     result = tasks_http.scrape_source_url(str(task_id))
@@ -190,3 +196,68 @@ def test_exhausted_fetch_budget_finalizes_dead_letter_without_retry(
         "dead_letter": True,
     }
     assert finalized == [(task_id, run_id, "network_error")]
+
+
+@pytest.mark.parametrize(
+    ("durable_attempt_count", "message_retries", "retry_after", "expected_delay"),
+    [
+        (1, 0, None, 0.5),
+        (2, 0, None, 1.0),
+        (2, 1, 120.0, 120.0),
+    ],
+)
+def test_retry_uses_durable_attempt_and_same_db_and_queue_delay(
+    monkeypatch: pytest.MonkeyPatch,
+    durable_attempt_count: int,
+    message_retries: int,
+    retry_after: float | None,
+    expected_delay: float,
+) -> None:
+    from typing import Any, cast
+
+    from app.workers import retry_policy
+
+    task_id = uuid.uuid4()
+    task = cast(Any, tasks_http.scrape_source_url)
+    read_attempt = AsyncMock(return_value=durable_attempt_count)
+    mark_retrying = AsyncMock(return_value=True)
+    published: list[float] = []
+
+    class RetryPublished(Exception):
+        pass
+
+    async def fail(*args: object, **kwargs: object) -> dict[str, object]:
+        raise tasks_http.TransientScrapeError(
+            "network_error", "fetch failed", retry_after=retry_after
+        )
+
+    def publish_retry(*, exc: Exception, countdown: float) -> None:
+        assert isinstance(exc, tasks_http.TransientScrapeError)
+        published.append(countdown)
+        raise RetryPublished
+
+    monkeypatch.setattr(
+        tasks_http, "_scrape_source_url_for_task_with_lease", fail
+    )
+    monkeypatch.setattr(tasks_http, "_read_task_attempt_count", read_attempt)
+    monkeypatch.setattr(tasks_http, "_mark_task_retrying", mark_retrying)
+    monkeypatch.setattr(
+        retry_policy.random, "uniform", lambda low, high: high / 2
+    )
+    monkeypatch.setattr(task, "retry", publish_retry)
+
+    task.push_request(retries=message_retries, called_directly=False)
+    try:
+        with pytest.raises(RetryPublished):
+            task.run(str(task_id))
+    finally:
+        task.pop_request()
+
+    read_attempt.assert_awaited_once_with(task_id)
+    mark_retrying.assert_awaited_once_with(
+        task_id,
+        reason="network_error",
+        message="fetch failed",
+        retry_delay=expected_delay,
+    )
+    assert published == [expected_delay]

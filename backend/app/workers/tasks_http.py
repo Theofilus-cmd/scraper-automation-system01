@@ -64,6 +64,7 @@ from app.workers.coordination import (
     release_task_execution_lease,
     renew_task_execution_lease,
 )
+from app.workers.retry_policy import calculate_retry_delay
 
 logger = get_logger(__name__)
 
@@ -173,6 +174,15 @@ async def _mark_task_started(task_id: uuid.UUID, *, attempt: int) -> bool:
             task.started_at = _utcnow()
         await session.commit()
         return True
+
+
+async def _read_task_attempt_count(task_id: uuid.UUID) -> int:
+    """Read the durable attempt count, including recovered dispatches."""
+    async with get_session() as session:
+        result = await session.execute(
+            select(TaskRow.attempt_count).where(TaskRow.id == task_id)
+        )
+        return int(result.scalar_one())
 
 
 async def _task_attempt_budget_exhausted(task_id: uuid.UUID) -> bool:
@@ -540,16 +550,13 @@ async def _scrape_source_url_for_task_with_lease(
 @typed_bound_task(
     name="app.workers.tasks_http.scrape_source_url",
     bind=True,
-    retry_backoff=True,
-    retry_backoff_max=60,
-    retry_jitter=True,
     max_retries=2,
 )
 def scrape_source_url(self: CeleryTask, task_id: str) -> dict[str, Any]:
     """doc 18 §5.2: `max_retries=2` (2 retries + the first attempt =
-    `max_attempts=3`, doc 07 §3). Manual retries honor Retry-After
-    when provided; otherwise Celery uses default_retry_delay. Autoretry
-    backoff options do not calculate the delay for this manual handler.
+    `max_attempts=3`, doc 07 §3). Manual retries use explicit
+    capped backoff with jitter based on the durable attempt count.
+    Retry-After is a minimum delay; DB and Celery use the same value.
     """
     attempt = self.request.retries + 1
     task_uuid = uuid.UUID(task_id)
@@ -593,13 +600,12 @@ def scrape_source_url(self: CeleryTask, task_id: str) -> dict[str, Any]:
             )
             return {"status": "failed", "error_reason": exc.reason, "dead_letter": True}
 
-        retry_delay = max(
-            0.0,
-            float(
-                self.default_retry_delay
-                if exc.retry_after is None
-                else exc.retry_after
-            ),
+        durable_attempt_count = run_async(
+            _read_task_attempt_count(task_uuid)
+        )
+        retry_delay = calculate_retry_delay(
+            attempt_count=durable_attempt_count,
+            retry_after=exc.retry_after,
         )
         retrying = run_async(
             _mark_task_retrying(
@@ -611,7 +617,7 @@ def scrape_source_url(self: CeleryTask, task_id: str) -> dict[str, Any]:
         )
         if not retrying:
             return {"status": "already_finalized"}
-        raise self.retry(exc=exc, countdown=exc.retry_after) from exc
+        raise self.retry(exc=exc, countdown=retry_delay) from exc
 
     logger.info("scrape task finished", extra={"task_id": task_id, "status": result.get("status")})
     return result
