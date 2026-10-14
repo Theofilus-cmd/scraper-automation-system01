@@ -29,6 +29,9 @@ tool's minimal footprint.
 """
 
 import json
+import re
+from collections import OrderedDict
+from copy import deepcopy
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
@@ -162,8 +165,34 @@ async def index() -> str:
     )
 
 
+_RETRY_FIXTURE_REQUESTS: OrderedDict[str, int] = OrderedDict()
+_MAX_RETRY_FIXTURES = 256
+
+
 @app.get("/products/{slug}", response_class=HTMLResponse)
 async def product_page(slug: str) -> str:
+    match = re.fullmatch(r"retry-test-([0-9a-f]{32})", slug)
+    if match is not None:
+        token = match.group(1)
+        request_count = _RETRY_FIXTURE_REQUESTS.get(token, 0) + 1
+        _RETRY_FIXTURE_REQUESTS[token] = request_count
+        _RETRY_FIXTURE_REQUESTS.move_to_end(token)
+        while len(_RETRY_FIXTURE_REQUESTS) > _MAX_RETRY_FIXTURES:
+            _RETRY_FIXTURE_REQUESTS.popitem(last=False)
+
+        if request_count == 1:
+            raise HTTPException(
+                status_code=503,
+                detail="controlled first-request failure",
+                headers={"Retry-After": "2"},
+            )
+
+        product = deepcopy(_PRODUCTS["widget-in-stock"])
+        product["sku"] = f"RETRY-{token}"
+        product["productID"] = f"retry-{token}"
+        product["name"] = f"Retry Fixture Widget {token}"
+        return _render_product_page(slug, product)
+
     product = _PRODUCTS.get(slug)
     if product is None:
         raise HTTPException(status_code=404, detail="product not found")
