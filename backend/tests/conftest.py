@@ -77,7 +77,11 @@ async def _dispose_db_engine_after_test(
     request: pytest.FixtureRequest,
 ) -> AsyncIterator[None]:
     """Deactivate fixture schedules after integration tests, then dispose."""
-    yield
-    if request.node.get_closest_marker("integration") is not None:
-        await _deactivate_fixture_schedules()
-    await dispose_engine_for_current_loop()
+    try:
+        yield
+    finally:
+        try:
+            if request.node.get_closest_marker("integration") is not None:
+                await _deactivate_fixture_schedules()
+        finally:
+            await dispose_engine_for_current_loop()

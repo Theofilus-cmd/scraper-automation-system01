@@ -1,25 +1,109 @@
 """Durable recovery of an execution deferred by coordination failure."""
 
+import sys
 import uuid
+from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import delete, or_, select
 
 from app.db.models import runs_repository
-from app.db.models.lifecycle import Run, Task
+from app.db.models.identity import Workspace
+from app.db.models.lifecycle import ObservationHistory, Run, Task
+from app.db.models.scraping import Source
 from app.db.session import get_session
 from app.workers import tasks_http
 from app.workers.async_bridge import run_async
 from app.workers.coordination import CoordinationUnavailableError
 from tests.factories import (
     MOCK_STORE_BASE_URL,
+    TEST_WORKSPACE_SLUG,
     create_test_run,
     create_test_source,
     create_test_task,
 )
 
 pytestmark = pytest.mark.integration
+
+
+async def _cleanup_recovery_work(source_ids: list[uuid.UUID]) -> None:
+    """Delete only this test's tasks/runs, preserving sources and history."""
+    if not source_ids:
+        return
+
+    async with get_session() as session:
+        owned_ids = set(
+            (
+                await session.execute(
+                    select(Source.id)
+                    .join(Workspace, Workspace.id == Source.workspace_id)
+                    .where(
+                        Source.id.in_(source_ids),
+                        Workspace.slug == TEST_WORKSPACE_SLUG,
+                        Source.url.op("~")(
+                            r"^http://mock-store:4000/products/"
+                            r"recovery-test-[0-9a-f]{32}$"
+                        ),
+                    )
+                )
+            ).scalars()
+        )
+        if owned_ids != set(source_ids):
+            raise RuntimeError("Recovery cleanup source scope mismatch.")
+
+        run_ids = select(Run.id).where(Run.source_id.in_(source_ids))
+        task_ids = select(Task.id).where(Task.source_id.in_(source_ids))
+        history_id = (
+            await session.execute(
+                select(ObservationHistory.id)
+                .where(
+                    or_(
+                        ObservationHistory.run_id.in_(run_ids),
+                        ObservationHistory.task_id.in_(task_ids),
+                    )
+                )
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+        if history_id is not None:
+            raise RuntimeError(
+                "Recovery cleanup refuses to delete work referenced by history."
+            )
+
+        await session.execute(
+            delete(Task).where(Task.source_id.in_(source_ids))
+        )
+        await session.execute(
+            delete(Run).where(Run.source_id.in_(source_ids))
+        )
+        await session.commit()
+
+
+@pytest.fixture(autouse=True)
+def _cleanup_recovery_work_after_test(
+    monkeypatch: pytest.MonkeyPatch,
+) -> Iterator[None]:
+    """Track sources created by this test and clean their work in teardown."""
+    source_ids: list[uuid.UUID] = []
+    original_create_test_source = create_test_source
+
+    async def tracked_create_test_source(
+        *,
+        url: str | None = None,
+        status: str = "active",
+    ) -> Source:
+        source = await original_create_test_source(url=url, status=status)
+        source_ids.append(source.id)
+        return source
+
+    monkeypatch.setattr(
+        sys.modules[__name__], "create_test_source", tracked_create_test_source
+    )
+    try:
+        yield
+    finally:
+        run_async(_cleanup_recovery_work(source_ids))
 
 
 def test_deferred_in_progress_task_is_requeued_with_same_id(
