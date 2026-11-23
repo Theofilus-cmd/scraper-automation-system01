@@ -387,3 +387,32 @@ async def get_task(
             Source.workspace_id == workspace_id
         )
     return (await session.execute(query)).scalar_one_or_none()
+
+async def list_tasks(
+    session: AsyncSession,
+    *,
+    workspace_id: uuid.UUID,
+    status: str | None,
+    source_id: uuid.UUID | None,
+    after: tuple[datetime, uuid.UUID] | None,
+    limit: int,
+) -> list[tuple[Task, datetime]]:
+    """List a workspace's tasks newest-first, keyed on (Run.created_at, Task.id)."""
+    query = (
+        select(Task, Run.created_at)
+        .join(Run, Run.id == Task.run_id)
+        .join(Source, Source.id == Task.source_id)
+        .where(Source.workspace_id == workspace_id)
+    )
+    if status is not None:
+        query = query.where(Task.status == status)
+    if source_id is not None:
+        query = query.where(Task.source_id == source_id)
+    if after is not None:
+        after_created_at, after_id = after
+        query = query.where(
+            (Run.created_at < after_created_at)
+            | ((Run.created_at == after_created_at) & (Task.id < after_id))
+        )
+    query = query.order_by(Run.created_at.desc(), Task.id.desc()).limit(limit)
+    return [(row[0], row[1]) for row in (await session.execute(query)).all()]

@@ -2,6 +2,15 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import HomePage from "../src/app/page";
+import { AppProviders } from "../src/components/app-shell";
+
+function HomeWithShell() {
+  return (
+    <AppProviders>
+      <HomePage />
+    </AppProviders>
+  );
+}
 
 const fetchMock = vi.fn();
 
@@ -23,7 +32,7 @@ describe("HomePage", () => {
       ok: true,
     } as Response);
 
-    render(<HomePage />);
+    render(<HomeWithShell />);
 
     expect(screen.getByRole("heading", { name: "Scraper Automation System" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Sign in" })).toBeInTheDocument();
@@ -39,7 +48,7 @@ describe("HomePage", () => {
       ok: true,
     } as Response);
 
-    render(<HomePage />);
+    render(<HomeWithShell />);
 
     const passwordInput = screen.getByLabelText("Password");
     expect(passwordInput).toHaveAttribute("type", "password");
@@ -75,7 +84,7 @@ describe("HomePage", () => {
         ok: true,
       } as Response);
 
-    render(<HomePage />);
+    render(<HomeWithShell />);
 
     fireEvent.change(screen.getByLabelText("Email"), {
       target: { value: "person@example.com" },
@@ -112,7 +121,7 @@ describe("HomePage", () => {
         status: 401,
       } as Response);
 
-    render(<HomePage />);
+    render(<HomeWithShell />);
 
     fireEvent.change(screen.getByLabelText("Email"), {
       target: { value: "person@example.com" },

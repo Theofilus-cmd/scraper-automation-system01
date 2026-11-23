@@ -1,9 +1,10 @@
-import type { PaginatedResponse, RegisterResponse, Run, Schedule, Source, SourceDetails, TokenResponse, TriggeredRun, User } from "./types";
+import type { Alert, ObservationHistoryRow, PaginatedResponse, Product, ProductDetails, Task, RegisterResponse, Run, Schedule, Source, SourceDetails, TokenResponse, TriggeredRun, User } from "./types";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
 type ApiErrorBody = {
   detail?: string;
+  error?: { message?: string };
 };
 
 export class ApiError extends Error {
@@ -48,7 +49,7 @@ async function request<T>(
 
   if (!response.ok) {
     const body = (await response.json().catch(() => ({}))) as ApiErrorBody;
-    throw new ApiError(body.detail ?? `Request failed (${response.status}).`, response.status);
+    throw new ApiError(body.detail ?? body.error?.message ?? `Request failed (${response.status}).`, response.status);
   }
 
   if (response.status === 204) {
@@ -91,8 +92,15 @@ export function getCurrentUser(token: string): Promise<User> {
   return request("/api/v1/auth/me", {}, token);
 }
 
-export function listSources(token: string): Promise<PaginatedResponse<Source>> {
-  return request("/api/v1/sources", {}, token);
+export function listSources(
+  token: string,
+  options: { cursor?: string | null; limit?: number } = {},
+): Promise<PaginatedResponse<Source>> {
+  const params = new URLSearchParams();
+  if (options.cursor) params.set("cursor", options.cursor);
+  if (options.limit) params.set("limit", String(options.limit));
+  const query = params.toString();
+  return request(`/api/v1/sources${query ? `?${query}` : ""}`, {}, token);
 }
 
 export function createSource(input: {
@@ -131,13 +139,15 @@ export function getRun(input: {
 
 export function listRuns(input: {
   token: string;
-  sourceId: string;
+  sourceId?: string;
+  status?: string;
+  cursor?: string | null;
   limit?: number;
 }): Promise<PaginatedResponse<Run>> {
-  const searchParams = new URLSearchParams({
-    source_id: input.sourceId,
-    limit: String(input.limit ?? 3),
-  });
+  const searchParams = new URLSearchParams({ limit: String(input.limit ?? 3) });
+  if (input.sourceId) searchParams.set("source_id", input.sourceId);
+  if (input.status) searchParams.set("status", input.status);
+  if (input.cursor) searchParams.set("cursor", input.cursor);
 
   return request(`/api/v1/runs?${searchParams.toString()}`, {}, input.token);
 }
@@ -218,6 +228,73 @@ export function unarchiveSource(input: {
     {
       method: "POST",
     },
+    input.token,
+  );
+}
+
+export function listRunTasks(input: {
+  token: string;
+  runId: string;
+}): Promise<PaginatedResponse<Task>> {
+  return request(`/api/v1/runs/${input.runId}/tasks`, {}, input.token);
+}
+
+export function listTasks(input: {
+  token: string;
+  status?: string;
+  cursor?: string | null;
+  limit?: number;
+}): Promise<PaginatedResponse<Task>> {
+  const params = new URLSearchParams({ limit: String(input.limit ?? 25) });
+  if (input.status) params.set("status", input.status);
+  if (input.cursor) params.set("cursor", input.cursor);
+  return request(`/api/v1/tasks?${params.toString()}`, {}, input.token);
+}
+
+export function listAlerts(input: {
+  token: string;
+  sourceId?: string;
+  kind?: string;
+  cursor?: string | null;
+  limit?: number;
+}): Promise<PaginatedResponse<Alert>> {
+  const params = new URLSearchParams({ limit: String(input.limit ?? 25) });
+  if (input.sourceId) params.set("source_id", input.sourceId);
+  if (input.kind) params.set("kind", input.kind);
+  if (input.cursor) params.set("cursor", input.cursor);
+  return request(`/api/v1/alerts?${params.toString()}`, {}, input.token);
+}
+
+export function listProducts(input: {
+  token: string;
+  sourceId: string;
+  limit?: number;
+}): Promise<PaginatedResponse<Product>> {
+  const params = new URLSearchParams({
+    source_id: input.sourceId,
+    limit: String(input.limit ?? 1),
+  });
+  return request(`/api/v1/products?${params.toString()}`, {}, input.token);
+}
+
+export function getProduct(input: {
+  token: string;
+  productId: string;
+}): Promise<ProductDetails> {
+  return request(`/api/v1/products/${input.productId}`, {}, input.token);
+}
+
+export function listProductHistory(input: {
+  token: string;
+  productId: string;
+  cursor?: string | null;
+  limit?: number;
+}): Promise<PaginatedResponse<ObservationHistoryRow>> {
+  const params = new URLSearchParams({ limit: String(input.limit ?? 100) });
+  if (input.cursor) params.set("cursor", input.cursor);
+  return request(
+    `/api/v1/products/${input.productId}/history?${params.toString()}`,
+    {},
     input.token,
   );
 }

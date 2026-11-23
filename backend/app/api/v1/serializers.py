@@ -11,6 +11,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
+from app.db.models.alerts import Alert
 from app.db.models.lifecycle import ObservationHistory, Run, Schedule, Task
 from app.db.models.scraping import CurrentObservation, Product, Source
 
@@ -138,4 +139,23 @@ def observation_history_to_dict(row: ObservationHistory) -> dict[str, Any]:
         "scraped_at": _iso(row.scraped_at),
         "change_summary": row.change_summary,
         "version_created_at": _iso(row.version_created_at),
+    }
+
+
+def alert_to_dict(alert: Alert) -> dict[str, Any]:
+    return {
+        "id": str(alert.id),
+        "source_id": str(alert.source_id),
+        "product_id": str(alert.product_id),
+        "run_id": str(alert.run_id) if alert.run_id is not None else None,
+        "task_id": str(alert.task_id) if alert.task_id is not None else None,
+        "kind": alert.kind,
+        "product_name": alert.product_name,
+        "product_url": alert.product_url,
+        "currency": alert.currency,
+        "old_value": alert.old_value,
+        "new_value": alert.new_value,
+        "email_status": alert.email_status,
+        "sent_at": _iso(alert.sent_at),
+        "created_at": _iso(alert.created_at),
     }

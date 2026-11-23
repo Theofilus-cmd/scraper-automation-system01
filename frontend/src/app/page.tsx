@@ -1,128 +1,175 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import Link from "next/link";
+import { FormEvent, useCallback, useState } from "react";
 
-import { AuthPanel } from "../components/auth-panel";
-import { SourcesPanel } from "../components/sources-panel";
-import { ApiError, checkApiReadiness, getCurrentUser } from "../lib/api";
-import {
-  clearStoredAccessToken,
-  getStoredAccessToken,
-  storeAccessToken,
-} from "../lib/auth-storage";
-import type { ApiStatus, AuthSession, User } from "../lib/types";
+import { DeleteSourceControl } from "../components/delete-source-control";
+import { EmptyState, ErrorState, formatDateTime, LoadingState, PageHeader, StatusBadge } from "../components/ui";
+import { errorMessage, useAsync } from "../hooks/use-async";
+import { createSource, listAlerts, listSources, listTasks } from "../lib/api";
+import { useSession } from "../lib/session";
+import type { Source } from "../lib/types";
 
-export default function HomePage() {
-  const [apiStatus, setApiStatus] = useState<ApiStatus>("checking");
-  const [session, setSession] = useState<AuthSession | null>(null);
-  const [isRestoringSession, setIsRestoringSession] = useState(true);
+function Summary({ token, sources }: { token: string; sources: Source[] }) {
+  const load = useCallback(async () => {
+    const [alerts, dead] = await Promise.all([
+      listAlerts({ token, limit: 100 }),
+      listTasks({ token, status: "dead_letter", limit: 100 }),
+    ]);
+    return { alerts: alerts.data.length, more: alerts.pagination.has_more, dead: dead.data.length, deadMore: dead.pagination.has_more };
+  }, [token]);
+  const { data } = useAsync(load);
 
-  useEffect(() => {
-    let cancelled = false;
+  const count = (n: number | undefined, more: boolean | undefined) =>
+    n === undefined ? "…" : `${n}${more ? "+" : ""}`;
 
-    async function checkReadiness() {
-      try {
-        await checkApiReadiness();
-        if (!cancelled) {
-          setApiStatus("ready");
-        }
-      } catch {
-        if (!cancelled) {
-          setApiStatus("unavailable");
-        }
-      }
+  return (
+    <ul aria-label="Summary" className="tiles">
+      <li>
+        <span className="tile-value">{sources.filter((s) => s.status === "active").length}</span>
+        <span className="muted">Active sources</span>
+      </li>
+      <li>
+        <Link href="/alerts">
+          <span className="tile-value">{count(data?.alerts, data?.more)}</span>
+          <span className="muted">Alerts</span>
+        </Link>
+      </li>
+      <li>
+        <Link href="/dead-letter">
+          <span className="tile-value">{count(data?.dead, data?.deadMore)}</span>
+          <span className="muted">Dead-lettered tasks</span>
+        </Link>
+      </li>
+    </ul>
+  );
+}
+
+export default function DashboardPage() {
+  const { session } = useSession();
+  if (session === null) return null;
+  return <Dashboard displayName={session.user.display_name} token={session.token} />;
+}
+
+function Dashboard({ displayName, token }: { displayName: string; token: string }) {
+  const [extra, setExtra] = useState<Source[]>([]);
+  const [url, setUrl] = useState("");
+  const [isCreating, setIsCreating] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [moreCursor, setMoreCursor] = useState<string | null | undefined>(undefined);
+  const [removed, setRemoved] = useState<Set<string>>(new Set());
+
+  const load = useCallback(() => listSources(token), [token]);
+  const { data, error, isLoading, reload } = useAsync(load);
+
+  const first = data?.data ?? [];
+  const sources = [...first, ...extra].filter((s) => !removed.has(s.id));
+  const nextCursor = moreCursor === undefined ? (data?.pagination.next_cursor ?? null) : moreCursor;
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setFormError(null);
+    setIsCreating(true);
+    try {
+      await createSource({ token, url: url.trim() });
+      setUrl("");
+      setExtra([]);
+      setMoreCursor(undefined);
+      setRemoved(new Set());
+      reload();
+    } catch (err) {
+      setFormError(errorMessage(err));
+    } finally {
+      setIsCreating(false);
     }
-
-    void checkReadiness();
-    const interval = window.setInterval(() => {
-      void checkReadiness();
-    }, 10_000);
-
-    return () => {
-      cancelled = true;
-      window.clearInterval(interval);
-    };
-  }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-    const token = getStoredAccessToken();
-
-    async function restoreSession() {
-      if (token === null) {
-        if (!cancelled) {
-          setIsRestoringSession(false);
-        }
-        return;
-      }
-
-      try {
-        const user = await getCurrentUser(token);
-        if (!cancelled) {
-          setSession({ token, user });
-        }
-      } catch (error) {
-        if (error instanceof ApiError && error.status === 401) {
-          clearStoredAccessToken();
-        }
-      } finally {
-        if (!cancelled) {
-          setIsRestoringSession(false);
-        }
-      }
-    }
-
-    void restoreSession();
-
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  function handleAuthenticated(token: string, user: User) {
-    storeAccessToken(token);
-    setSession({ token, user });
   }
 
-  function handleLogout() {
-    clearStoredAccessToken();
-    setSession(null);
+  async function loadMore() {
+    if (!nextCursor) return;
+    setIsLoadingMore(true);
+    try {
+      const page = await listSources(token, { cursor: nextCursor });
+      setExtra((current) => [...current, ...page.data]);
+      setMoreCursor(page.pagination.next_cursor);
+    } catch (err) {
+      setFormError(errorMessage(err));
+    } finally {
+      setIsLoadingMore(false);
+    }
   }
 
   return (
-    <main className="app-shell">
-      <header className="app-header">
-        <div>
-          <p className="eyebrow">Product monitoring workspace</p>
-          <h1>Scraper Automation System</h1>
-        </div>
-        <p className="api-status">
-          API status: <span data-testid="api-status">{apiStatus}</span>
+    <section aria-labelledby="dashboard-heading" className="page">
+      <PageHeader eyebrow="Signed in" title={`Hello, ${displayName}`}>
+        <button disabled={isLoading} onClick={reload} type="button">
+          {isLoading ? "Refreshing…" : "Refresh"}
+        </button>
+      </PageHeader>
+      <h2 className="sr-only" id="dashboard-heading">
+        Dashboard
+      </h2>
+
+      <Summary sources={sources} token={token} />
+
+      <form className="source-form" onSubmit={handleSubmit}>
+        <label>
+          Product URL
+          <input
+            onChange={(event) => setUrl(event.target.value)}
+            placeholder="http://mock-store:4000/products/example"
+            required
+            type="url"
+            value={url}
+          />
+        </label>
+        <button disabled={isCreating} type="submit">
+          {isCreating ? "Adding…" : "Add source"}
+        </button>
+      </form>
+      {formError ? (
+        <p className="form-error" role="alert">
+          {formError}
         </p>
-      </header>
+      ) : null}
 
-      {isRestoringSession ? (
-        <section aria-live="polite" className="loading-panel">
-          Restoring your session…
-        </section>
-      ) : session ? (
-        <section aria-labelledby="dashboard-heading" className="dashboard-panel">
-          <div className="dashboard-heading">
-            <div>
-              <p className="eyebrow">Signed in</p>
-              <h2 id="dashboard-heading">Hello, {session.user.display_name}</h2>
-              <p className="muted">{session.user.email}</p>
-            </div>
-            <button onClick={handleLogout} type="button">
-              Sign out
-            </button>
-          </div>
-
-          <SourcesPanel token={session.token} />
-        </section>
+      <h3>Sources</h3>
+      {isLoading && data === null ? (
+        <LoadingState label="Loading sources…" />
+      ) : error && data === null ? (
+        <ErrorState message={error} onRetry={reload} />
+      ) : sources.length === 0 ? (
+        <EmptyState hint="Add a supported product URL above to start monitoring." title="No sources yet" />
       ) : (
-        <AuthPanel onAuthenticated={handleAuthenticated} />
+        <ul className="card-list">
+          {sources.map((source) => (
+            <li className="card" key={source.id}>
+              <div className="card-main">
+                <Link className="card-title" href={`/sources/${source.id}`}>
+                  {source.url}
+                </Link>
+                <p className="muted">
+                  {source.adapter_type} · added {formatDateTime(source.created_at)}
+                </p>
+              </div>
+              <StatusBadge status={source.status} />
+              {source.status !== "archived" ? (
+                <DeleteSourceControl
+                  onDeleted={() => setRemoved((current) => new Set(current).add(source.id))}
+                  sourceId={source.id}
+                  sourceUrl={source.url}
+                  token={token}
+                />
+              ) : null}
+            </li>
+          ))}
+        </ul>
       )}
-    </main>
+      {nextCursor ? (
+        <button disabled={isLoadingMore} onClick={() => void loadMore()} type="button">
+          {isLoadingMore ? "Loading…" : "Load more"}
+        </button>
+      ) : null}
+    </section>
   );
 }

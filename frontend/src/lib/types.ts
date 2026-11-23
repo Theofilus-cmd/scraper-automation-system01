@@ -55,6 +55,10 @@ export type Schedule = {
 
 export type SourceDetails = Source & {
   schedule: Schedule | null;
+  current_product?: {
+    product: Product;
+    observation: Observation | null;
+  } | null;
 };
 
 export type Pagination = {
@@ -94,4 +98,83 @@ export type TriggeredRun = {
   run_id: string;
   task_id: string | null;
   status: RunStatus;
+};
+
+export type TaskStatus =
+  | "queued"
+  | "in_progress"
+  | "succeeded"
+  | "failed"
+  | "retrying"
+  | "dead_letter";
+
+export type Task = {
+  id: string;
+  run_id: string;
+  source_id: string;
+  status: TaskStatus;
+  attempt_count: number;
+  max_attempts: number;
+  error_reason: string | null;
+  error_detail: Record<string, unknown> | null;
+  queued_at: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+};
+
+export type AlertKind = "price_changed" | "stock_status_changed";
+
+export type Alert = {
+  id: string;
+  source_id: string;
+  product_id: string;
+  run_id: string | null;
+  task_id: string | null;
+  kind: AlertKind;
+  product_name: string;
+  product_url: string;
+  currency: string | null;
+  old_value: string;
+  new_value: string;
+  email_status: "pending" | "sending" | "sent" | "failed" | "skipped";
+  sent_at: string | null;
+  created_at: string | null;
+};
+
+export type Product = {
+  id: string;
+  source_id: string;
+  product_identity_key: string;
+  product_url: string;
+  sku: string | null;
+  source_product_id: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+};
+
+export type Observation = {
+  product_name: string | null;
+  brand: string | null;
+  category: string | null;
+  price: string | null;
+  currency: string | null;
+  original_price: string | null;
+  stock_status: string;
+  rating: string | null;
+  review_count: number | null;
+  image_url: string | null;
+  is_valid: boolean;
+  scraped_at: string | null;
+};
+
+export type ProductDetails = Product & {
+  current_observation: Observation | null;
+};
+
+export type ObservationHistoryRow = Observation & {
+  id: string;
+  product_id: string;
+  run_id: string;
+  task_id: string;
+  version_created_at: string | null;
 };

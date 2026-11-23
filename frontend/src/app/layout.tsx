@@ -1,11 +1,15 @@
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
+
+import { AppProviders } from "../components/app-shell";
 import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Scraper Automation System",
-  description: "Phase 0 walking skeleton.",
+  description: "Monitor product prices and stock across sources.",
 };
+
+export const viewport = { width: "device-width", initialScale: 1 };
 
 export default function RootLayout({
   children,
@@ -14,7 +18,9 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
-      <body>{children}</body>
+      <body>
+        <AppProviders>{children}</AppProviders>
+      </body>
     </html>
   );
 }

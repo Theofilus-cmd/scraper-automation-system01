@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.v1.alerts import router as alerts_router
 from app.api.v1.auth import router as auth_router
 from app.api.v1.business_data import router as business_data_router
 from app.api.v1.error_mapping import domain_error_handler
@@ -14,6 +15,7 @@ from app.api.v1.runs import router as runs_router
 from app.api.v1.scrapes import LegacyScrapesDeprecationMiddleware
 from app.api.v1.scrapes import router as scrapes_router
 from app.api.v1.sources import router as sources_router
+from app.api.v1.tasks import router as tasks_router
 from app.core.config import get_settings
 from app.core.errors import register_error_handling
 from app.core.health import router as health_router
@@ -61,6 +63,8 @@ def create_app() -> FastAPI:
     app.include_router(runs_router, prefix="/api/v1")
     app.include_router(products_router, prefix="/api/v1")
     app.include_router(scrapes_router, prefix="/api/v1")
+    app.include_router(alerts_router, prefix="/api/v1")
+    app.include_router(tasks_router, prefix="/api/v1")
 
     return app
 
