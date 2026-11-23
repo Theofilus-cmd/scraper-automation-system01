@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import replace
 from typing import ClassVar
 from urllib.parse import urlparse, urlunparse
 
@@ -31,6 +32,9 @@ _PRODUCT_PATH = re.compile(r"^(?:/collections/[^/]+)?/products/([^/]+?)(?:\.json
 _PRODUCTS_JSON_PATH = re.compile(r"^/(?:collections/[^/]+/)?products\.json/?$")
 _COLLECTION_PATH = re.compile(r"^/collections/[^/]+/?$")
 _TAG_RE = re.compile(r"<[^>]+>")
+
+DEFAULT_CURRENCY = "USD"  # products.json carries no currency; documented fallback
+_CURRENCY_KEY = "_currency"  # injected by fetch() from /meta.json
 
 PAGE_LIMIT = 250  # Shopify's documented maximum for products.json
 
@@ -61,7 +65,19 @@ def _json_url(url: str) -> str:
     return url
 
 
-def _parse_product(data: dict[str, object]) -> RawFields:
+async def _shop_currency(url: str) -> str | None:
+    """Best-effort ISO currency from the storefront's public /meta.json."""
+    parts = urlparse(url)
+    try:
+        page = await fetcher.fetch(urlunparse(parts._replace(path="/meta.json", query="")))
+        data = json.loads(page.html) if page.status_code == 200 else None
+    except Exception:  # noqa: BLE001 -- currency lookup must never fail the scrape
+        return None
+    code = data.get("currency") if isinstance(data, dict) else None
+    return code if isinstance(code, str) and len(code) == 3 else None
+
+
+def _parse_product(data: dict[str, object], currency: str | None = None) -> RawFields:
     variants = data.get("variants")
     variant = variants[0] if isinstance(variants, list) and variants else {}
     if not isinstance(variant, dict):
@@ -93,6 +109,7 @@ def _parse_product(data: dict[str, object]) -> RawFields:
         stock_status_raw=stock_raw,
         description=_TAG_RE.sub("", body).strip() if body else None,
         image_url=_as_str(image_src),
+        price_currency=currency or DEFAULT_CURRENCY,
     )
 
 
@@ -111,6 +128,15 @@ class ShopifyAdapter:
     async def fetch(self, url: str, ctx: FetchContext | None = None) -> RawPage:
         page = await fetcher.fetch(_json_url(url))
         if page.status_code == 200 and page.html.lstrip().startswith(("{", "[")):
+            currency = await _shop_currency(url)
+            if currency is not None:
+                try:
+                    data = json.loads(page.html)
+                    if isinstance(data, dict):
+                        data[_CURRENCY_KEY] = currency
+                        return replace(page, html=json.dumps(data))
+                except json.JSONDecodeError:
+                    pass
             return page
         # Endpoint disabled/blocked: fall back to the human-facing page so
         # parse() can try JSON-LD.
@@ -134,6 +160,8 @@ class ShopifyAdapter:
                 items = [data["product"]]
             else:
                 return []
-            return [_parse_product(p) for p in items if isinstance(p, dict)]
+            currency = data.get(_CURRENCY_KEY)
+            currency = currency if isinstance(currency, str) else None
+            return [_parse_product(p, currency) for p in items if isinstance(p, dict)]
         # HTML: schema.org JSON-LD fallback (shared extraction, no I/O).
         return MockStoreAdapter().parse(page, schema)

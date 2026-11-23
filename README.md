@@ -1,14 +1,49 @@
 # Scraper Automation System
 
-Phase 0 walking skeleton: a runnable, health-checked Docker Compose stack
-with no scraping logic yet. It exists to prove the wiring -- database,
-cache, queue, API, frontend, migrations, and worker processes -- all boot
-and talk to each other correctly before any product feature is built on
-top of it.
+SaaS-style price/stock monitoring platform. Users register, add a public
+product URL (mock store or a Shopify storefront), and the system scrapes it
+on demand or on a schedule, stores the current observation plus an
+append-only price/stock history, detects changes, records alerts, and sends
+alert emails. A multi-page Next.js UI shows sources, runs, price charts,
+alerts and dead-lettered tasks.
 
-See `docs/design/` for the full architecture, and
-`docs/design/16-phase-0-walking-skeleton-plan.md` specifically for the
-plan this skeleton implements.
+Everything runs under Docker Compose. See `docs/design/` for the full
+architecture and `PROJECT_CONTEXT.md` for the current implementation state.
+
+## Architecture
+
+| Service         | Tech                        | Role                                                         |
+| --------------- | --------------------------- | ------------------------------------------------------------ |
+| `frontend`      | Next.js (port 3000)         | Login/register, sources, runs, charts, alerts, dead-letter   |
+| `api`           | FastAPI (port 8000)         | Auth, sources, runs, products, alerts, tasks, business data  |
+| `scheduler`     | Python service              | Heartbeat, claims due schedules, reconciliation, retention   |
+| `worker-http`   | Celery (queue `http`)       | Fetch + parse + normalize + persist, alert detection + email |
+| `postgres`      | PostgreSQL 16 (+ PgBouncer :6432) | Application data                                       |
+| `redis`         | Redis 7                     | Celery broker, execution lease, per-domain politeness, auth rate limits |
+| `mailhog`       | MailHog (UI :8025)          | Dev SMTP sink for alert emails                               |
+| `mock-store`    | FastAPI (port 4000)         | Deterministic local scrape target                            |
+| `migrate`       | Alembic (one-shot)          | Runs `alembic upgrade head` (migrations 0001-0007)           |
+
+Scrape flow: `POST /sources/{id}/runs` (or a due schedule) creates a run and
+a durable task -> Celery `http` queue -> worker takes a Redis execution lease,
+applies domain politeness (semaphore, rate limit, cooldown), fetches through
+the SSRF-hardened fetcher, runs the adapter (`mock_store` or `shopify`),
+normalizes and validates, then in ONE transaction upserts the product,
+updates `current_observations`, appends `observation_history` when values
+changed, and writes `alerts` rows (unique `dedupe_key`). Alert emails are
+then sent via SMTP (claim-then-send). Transient failures retry with jittered
+backoff (honouring `Retry-After`); persistent failures end dead-lettered.
+
+### Adapters
+
+- `mock_store` - schema.org JSON-LD pages from the local mock store.
+- `shopify` - URL must be a Shopify-shaped path: `/products.json`,
+  `/collections/<c>`, or `/products/<handle>`. Reads the public JSON
+  endpoints, falling back to JSON-LD. `products.json` has no currency, so
+  the adapter reads it from the shop's `/meta.json` and falls back to `USD`.
+  **A source tracks one product**: for a multi-product URL such as
+  `/products.json?limit=20`, only the first product is persisted.
+  Use `/products/<handle>` to track a specific product.
 
 ## First-time setup (bootstrap)
 
@@ -105,27 +140,99 @@ harmless (git-ignored, and the Docker build installs its own copy inside
 the image regardless), delete it if you'd rather not have it sitting
 there: `rm -rf frontend/node_modules`.
 
-## Quickstart (lightweight default)
+## Quickstart
 
-The default profile starts only the 10 services needed to pass the Phase
-0 acceptance checklist, chosen to run comfortably on a low-RAM laptop.
-Run this after the one-time bootstrap above.
+Run after the one-time bootstrap above.
 
 ```bash
-make up
-make health
+make up          # docker compose up -d --build (default profile)
+make health      # curls /healthz and /readyz
 ```
 
-`make up` runs `docker compose up -d --build` (after confirming all three
-lockfiles exist). `make health` curls both `/healthz` and `/readyz` on
-the API.
+Default services: postgres, pgbouncer, redis, mailhog, migrate (one-shot),
+api, scheduler, worker-http, mock-store, frontend.
 
-Once healthy:
-
-- API: http://localhost:8000/healthz and http://localhost:8000/readyz
 - Frontend: http://localhost:3000
+- API: http://localhost:8000 (`/healthz`, `/readyz`, interactive docs at `/docs`)
 - MailHog UI: http://localhost:8025
 - Mock store: http://localhost:4000
+
+### Try it end to end
+
+```bash
+API=http://localhost:8000/api/v1
+TOKEN=$(curl -s -X POST $API/auth/register -H 'content-type: application/json' \
+  -d '{"email":"me@example.com","password":"Passw0rd!long123","display_name":"Me"}' \
+  | python3 -c 'import sys,json;print(json.load(sys.stdin)["token"]["access_token"])')
+
+# Public Shopify storefront (needs outbound internet)
+SID=$(curl -s -X POST $API/sources -H "authorization: Bearer $TOKEN" \
+  -H 'content-type: application/json' \
+  -d '{"url":"https://www.allbirds.com/products.json?limit=20"}' \
+  | python3 -c 'import sys,json;print(json.load(sys.stdin)["id"])')
+
+curl -s -X POST $API/sources/$SID/runs -H "authorization: Bearer $TOKEN"   # 202
+sleep 10
+curl -s $API/products -H "authorization: Bearer $TOKEN"
+```
+
+Then open http://localhost:3000 and log in with the same account. Use a URL
+such as `http://mock-store:4000/products/widget-in-stock` for the offline mock store.
+
+### SSRF allowlist and public stores
+
+`SSRF_ALLOWED_HOSTS` (default `mock-store`) only **exempts** the listed hosts
+from the private/loopback-IP block; public hosts are never blocked by it.
+Set it empty (`SSRF_ALLOWED_HOSTS=`) outside development.
+
+### Alerts
+
+When a scrape finds a different price or stock status than the stored
+observation, an `alerts` row (`price_changed` / `stock_status_changed`) is
+written and an email is sent to the workspace owner via SMTP (MailHog in dev:
+`SMTP_HOST=mailhog`, `SMTP_PORT=1025`, toggle with `ALERTS_EMAIL_ENABLED`).
+Read them at `GET /api/v1/alerts` or in the MailHog UI.
+
+## API (all under `/api/v1`, Bearer JWT unless noted)
+
+| Method & path | Purpose |
+| --- | --- |
+| `POST /auth/register`, `POST /auth/login` (no auth, rate limited), `GET /auth/me` | Accounts |
+| `POST /sources` | Create/get a source (201 new / 200 existing); 422 `UNSUPPORTED_ADAPTER` if no adapter matches |
+| `GET /sources`, `GET/PATCH/DELETE /sources/{id}`, `POST /sources/{id}/unarchive` | List, read, pause/activate (`status`), archive |
+| `PUT/DELETE /sources/{id}/schedule` | Set (`interval_minutes`, `is_active`) / remove schedule |
+| `POST /sources/{id}/runs` | Manual run (202; optional `Idempotency-Key` header) |
+| `GET /runs`, `GET /runs/{id}`, `GET /runs/{id}/tasks` | Runs and their tasks |
+| `GET /tasks` | Tasks (incl. failed / dead-lettered, with `error_reason`) |
+| `GET /products`, `GET /products/{id}`, `GET /products/{id}/history` | Products, current observation, price/stock history |
+| `GET /alerts` | Detected changes (`kind`, email status) |
+| `POST /scrapes`, `GET /scrapes/{task_id}` | Legacy single-URL scrape aliases |
+| `POST/GET /business-data/sources`, `GET /business-data/sources/{id}`, `POST .../ingest`, `GET .../runs`, `GET .../records`, `GET .../records/{rid}/history` | Business-data hub |
+
+List endpoints use cursor pagination (`cursor`, `limit`) and return
+`{"data": [...], "pagination": {"next_cursor", "has_more"}}`.
+
+## Frontend pages
+
+`/` (login/register, summary tiles for alerts and dead-lettered tasks,
+sources list, add source), `/sources/[id]` (schedule, manual run, runs,
+recent alerts, price/stock history charts), `/runs/[id]` (run + task
+detail), `/alerts` (filter by kind), `/dead-letter`.
+
+## Database migrations
+
+Alembic, `backend/app/db/migrations/versions/`, applied automatically by the
+`migrate` service (or `make migrate`):
+
+| Rev  | Content |
+| ---- | ------- |
+| 0001 | Enable extensions |
+| 0002 | Core scraping tables (sources, products, current_observations) |
+| 0003 | Source lifecycle, schedules, runs/tasks, `observation_history` (immutable) |
+| 0004 | Users, workspaces, workspace members, source tenancy |
+| 0005 | Business-data hub tables |
+| 0006 | Allow `shopify` in `sources.adapter_type` |
+| 0007 | `alerts` (unique `dedupe_key`, email delivery state) |
 
 ## Optional profiles
 
@@ -145,9 +252,9 @@ Combine profiles by chaining `--profile` flags:
 docker compose --profile browser --profile workers up -d --build
 ```
 
-None of these are required for Phase 0 sign-off. `/readyz` never checks
-MinIO, and the browser/notifications/exports workers are not part of the
-default acceptance criteria (see doc 16 for the full reasoning).
+None are needed for the core flow. `worker-browser`, `worker-notifications`
+and `worker-exports` are still stubs (ping tasks only); alert emails are
+sent by `worker-http`. `/readyz` checks only Postgres and Redis.
 
 ## Prerequisites
 
@@ -205,13 +312,9 @@ The default (minimal) profile is sized for constrained hardware:
 
 - System RAM: 6 GB minimum, 8 GB comfortable
 - Docker Desktop / Engine memory allocation: 3 GB minimum, 4 GB comfortable
-- Observed steady-state usage: roughly 1-1.2 GB across all 10 default services
+- Steady-state usage: roughly 1-1.5 GB across the default services
 
-Each optional profile adds incremental cost on top of that -- see doc 16
-§H for the full breakdown. A future phase adding real Playwright/Chromium
-browser automation will raise the `browser` profile's RAM needs
-substantially; the current `worker-browser` stub uses the same
-lightweight image as the other workers.
+Each optional profile adds incremental cost on top of that.
 
 ## Project structure
 
@@ -223,8 +326,17 @@ scripts/      Dev-environment helper scripts
 docs/design/  Architecture and planning documents
 ```
 
+## Tests
+
+```bash
+make test-backend    # docker compose exec api pytest  (unit + real Postgres/Redis integration)
+make test-frontend   # vitest
+make lint && make typecheck
+```
+
+Rebuild images (`docker compose up -d --build api worker-http scheduler`)
+first so the containers contain your latest code and tests.
+
 ## Contributing
 
-This is Phase 0 of a phased build. Do not add Phase 1+ functionality
-(real scraping, auth, billing, etc.) without an approved design update in
-`docs/design/`.
+Larger changes should be reflected in `docs/design/` and `PROJECT_CONTEXT.md`.

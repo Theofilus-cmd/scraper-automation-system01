@@ -1,501 +1,102 @@
-PRD Teknis — Scraper Automation System
-Dokumen ini merangkum sistem SaaS otomasi scraping berbasis web yang sedang dibangun pada branch phase3. Fokus implementasi saat ini adalah fondasi backend: scheduler durable tasks, worker Celery, politeness per-domain, observability, dan frontend monitoring.
+# PROJECT_CONTEXT — Scraper Automation System
 
-1. Ringkasan Produk
-Aplikasi ini adalah platform SaaS untuk menjalankan pekerjaan scraping secara terjadwal, tervalidasi, dan dapat diamati. Pengguna membuat task scraping, sistem menjadwalkannya, worker mengeksekusinya dengan batasan politeness per-domain, lalu hasil dan status eksekusi tersimpan untuk monitoring.
+Handoff document for the `phase3` branch. Describes what is implemented
+today. Design intent lives in `docs/design/` (esp. 18 and 19); setup and
+usage live in `README.md`.
 
-Sistem dirancang untuk operasi multi-tenant, dengan autentikasi JWT, isolasi data per user, dan antrean eksekusi yang tahan terhadap retry. Prinsip utamanya adalah durable task sebagai sumber kebenaran status, bukan keberadaan pesan di broker.
+## 1. Product
 
-2. Arsitektur Sistem
-2.1 Komponen utama
-Komponen	Teknologi	Peran
-Frontend	Next.js/React, port 3000	Dashboard, autentikasi, manajemen task, monitoring
-API	FastAPI/Uvicorn, port 8000	Autentikasi, CRUD resource, validasi, orkestrasi task
-Scheduler	Python service	Klaim jadwal due, heartbeat, rekonsiliasi, retention
-HTTP worker	Celery worker	Eksekusi scraping HTTP, integrasi politeness, persistence
-PostgreSQL	PostgreSQL 16 + PgBouncer	Data aplikasi, task, run, observasi, user
-Redis	Redis 7	Broker Celery, lease eksekusi, rate limit, cooldown, semaphore
-Mock Store	FastAPI, port 4000	Target scraping internal untuk pengembangan dan integration test
-MailHog	MailHog, port 8025	Email development/testing
-2.2 Alur eksekusi
-User login melalui frontend dan memperoleh JWT.
+Price/stock monitoring SaaS. A user registers (a personal workspace is
+created), adds a public product URL as a **source**, runs a scrape manually
+or on a schedule, and gets the current observation, an append-only history,
+**alerts** on price / stock-status changes, and alert emails. All data is
+workspace-scoped (multi-tenant isolation) behind JWT auth.
 
-User membuat atau mengaktifkan task scraping melalui API.
+## 2. Architecture
 
-Scheduler memeriksa task yang due, lalu membuat run eksekusi.
+| Component | Tech | Role |
+| --- | --- | --- |
+| frontend | Next.js, :3000 | Multi-page UI (see §7) |
+| api | FastAPI, :8000 | REST `/api/v1`, `/healthz`, `/readyz` |
+| scheduler | Python | Heartbeat (15s), claim due schedules (10s, batch 20), reconciliation (120s, stuck-task timeout 10 min), retention purge (3600s, 90 days) |
+| worker-http | Celery, queue `http` | Scrape tasks, persistence, alert detection, alert email |
+| postgres + pgbouncer | PG16, PgBouncer :6432 (scram-sha-256) | Data |
+| redis | Redis 7 | Celery broker, execution lease, politeness state, auth rate limits |
+| mailhog | :8025 UI, SMTP 1025 | Dev email sink |
+| mock-store | FastAPI :4000 | Deterministic local target (static; includes failure fixtures such as `widget-missing-price`, a 503 dead-letter product) |
+| migrate | Alembic one-shot | `alembic upgrade head` |
 
-Scheduler mengirim pekerjaan ke Celery/Redis.
+Optional compose profiles: `browser` (worker-browser), `workers`
+(worker-notifications, worker-exports), `storage` (minio), `monitoring`
+(flower, prometheus, grafana). The browser/notifications/exports workers are
+**stubs** (ping tasks only).
 
-Worker mengklaim pekerjaan dan memperoleh execution lease di Redis.
+### Scrape pipeline
 
-Worker memvalidasi target, menjalankan fetch, dan menerapkan politeness per-domain.
+1. `POST /sources/{id}/runs` (or scheduler claim) creates a `run` + durable `task`; Celery message goes to `http`.
+2. Worker acquires a Redis **execution lease** (token-based, Lua renew/release, TTL 60s). Redis failure is fail-closed (`CoordinationUnavailableError`); lost lease raises `LeaseOwnershipLostError`.
+3. **Politeness enforced during fetch**: per-domain semaphore (max 3), rate limit (2s), cooldown (600s after e.g. 503).
+4. SSRF-hardened `fetcher.fetch` (only allowed HTTP path). Hosts resolving to private/loopback/link-local are blocked, except hosts in `SSRF_ALLOWED_HOSTS` (default `mock-store`; empty it outside dev). Public hosts are never affected by that list.
+5. Adapter `parse` → `normalize` → validate (required: product name, price, currency, …). Failure → task `failed` with `error_reason` / `validation_errors`, nothing written.
+6. One transaction: upsert `products`, update `current_observations`, append `observation_history` (immutable trigger) if values changed, insert `alerts` (UNIQUE `dedupe_key`; redelivery-safe).
+7. Alert email: claim-then-send over SMTP (`email_status` pending/sending/sent/failed/skipped, max 5 attempts, claim timeout 300s).
+8. Transient errors retry (jittered backoff from durable attempt count, `Retry-After` seconds and HTTP-date honoured, max 3 attempts); persistent failure → `dead_letter`.
 
-Worker menyimpan observasi, status run, error, retry, dan dead-letter bila diperlukan.
+Note: the worker persists only `raw_records[0]`, so **one source = one product**.
 
-Frontend menampilkan status task, run, dan metrik operasional.
+### Adapters (`backend/app/scraping/adapters/`)
 
-2.3 Prinsip reliability
-Durable task adalah sumber kebenaran. Kehadiran pesan di Redis bukan jaminan status akhir.
+- `mock_store` — JSON-LD pages.
+- `shopify` — matches path shapes `/products.json`, `/collections/<c>`, `/products/<handle>` (confidence 0.6/0.5; registry floor applies). Fetches the public JSON endpoint, falls back to JSON-LD. Currency: `products.json` has none, so `fetch()` best-effort reads `/meta.json` `currency` (injected as `_currency`), otherwise `USD`. For a multi-product URL only the first product is stored.
 
-Execution lease mencegah dua worker aktif mengeksekusi task yang sama secara bersamaan, tetapi bukan exactly-once guarantee.
+## 3. API (`/api/v1`, Bearer JWT except register/login)
 
-Redis outage bersifat fail-closed untuk koordinasi: worker tidak boleh melanjutkan eksekusi bila tidak dapat memastikan kepemilikan lease atau koordinasi domain.
+- Auth: `POST /auth/register` (201; returns user, workspace, token), `POST /auth/login`, `GET /auth/me`. Register/login are Redis rate limited (10/60s per IP; login also per email; fail-open if Redis down).
+- Sources: `POST /sources` (201 new / 200 existing; 422 `UNSUPPORTED_ADAPTER`), `GET /sources`, `GET|PATCH|DELETE /sources/{id}` (PATCH `status` active|paused; DELETE archives), `POST /sources/{id}/unarchive`, `PUT|DELETE /sources/{id}/schedule`, `POST /sources/{id}/runs` (202, `Idempotency-Key`).
+- Runs/tasks: `GET /runs`, `GET /runs/{id}`, `GET /runs/{id}/tasks`, `GET /tasks` (filter by status, e.g. `dead_letter`).
+- Products: `GET /products`, `GET /products/{id}` (with `current_observation`), `GET /products/{id}/history`.
+- Alerts: `GET /alerts` (kind `price_changed` | `stock_status_changed`).
+- Legacy: `POST /scrapes`, `GET /scrapes/{task_id}`.
+- Business data hub: `POST|GET /business-data/sources`, `GET /business-data/sources/{id}`, `POST …/ingest`, `GET …/runs`, `GET …/records`, `GET …/records/{id}/history`.
+- Pagination: cursor (`cursor`, `limit`) → `{data, pagination:{next_cursor, has_more}}`. Errors: `{"error":{code,message,details}}`.
 
-Retry terbatas dan terukur. Kegagalan persisten berakhir di dead-letter setelah batas attempt.
+## 4. Database (Alembic 0001–0007)
 
-Observability wajib. Setiap eksekusi menghasilkan run, observasi, status, dan jejak kegagalan yang dapat dipantau.
+| Rev | Content |
+| --- | --- |
+| 0001 | Extensions |
+| 0002 | sources, products, current_observations |
+| 0003 | Source lifecycle (archive/pause), schedules, runs, tasks, observation_history (immutability trigger + retention bypass); partial unique index on normalized_url for non-archived sources |
+| 0004 | users, workspaces, workspace_members; source tenancy |
+| 0005 | business_data_sources/schedules/runs/records/record_history |
+| 0006 | `shopify` allowed in `sources.adapter_type` |
+| 0007 | alerts (+ email delivery columns, UNIQUE dedupe_key) |
 
-3. Modul Backend
-3.1 Autentikasi dan user
-Registrasi dan login user.
+Tables: alembic_version, alerts, business_data_*, current_observations, observation_history, products, runs, schedules, sources, tasks, users, workspace_members, workspaces.
 
-JWT access token dengan algoritma HS256.
+## 5. Configuration (env, see `backend/app/core/config.py`)
 
-JWT_SECRET_KEY wajib disediakan melalui environment; tidak boleh memakai default development secret di produksi.
+`JWT_SECRET_KEY` (required, HS256, 30 min), `DATABASE_URL`, `REDIS_URL`, `CORS_ALLOW_ORIGINS`, `SSRF_ALLOWED_HOSTS`, `TASK_EXECUTION_LEASE_SECONDS=60`, `DOMAIN_MAX_CONCURRENCY=3`, `DOMAIN_RATE_LIMIT_SECONDS=2`, `DOMAIN_COOLDOWN_SECONDS=600`, `ALERTS_EMAIL_ENABLED`, `SMTP_HOST/PORT/USERNAME/PASSWORD/USE_STARTTLS`, `NOTIFICATION_FROM_EMAIL`, `AUTH_RATE_LIMIT_*`, `SCRAPER_USER_AGENT` (override in real deployments).
 
-Data dan resource aplikasi diisolasi per user.
+## 6. Run / test
 
-Access token default kedaluwarsa dalam 30 menit.
+`make bootstrap` (once) → `make up` → `make health`. Tests: `make test-backend` (pytest, real Postgres/Redis), `make test-frontend`, `make lint`, `make typecheck`. Rebuild `api worker-http scheduler` images before testing so tests in the container match the working tree.
 
-3.2 Task scraping
-Task adalah definisi pekerjaan scraping yang dimiliki user. Task menyimpan target, konfigurasi eksekusi, jadwal, status, dan hubungan ke run.
+## 7. Frontend (`frontend/src/app`)
 
-Aturan inti:
+`/` login/register, summary tiles (alerts, dead-lettered tasks), sources list + add; `/sources/[id]` schedule, manual run, runs, recent alerts, price/stock history charts; `/runs/[id]`; `/alerts`; `/dead-letter`.
 
-Task harus dimiliki oleh user pembuatnya.
+## 8. Verified end to end (module F)
 
-Task dapat dijadwalkan atau dieksekusi sesuai kebutuhan.
+Against a live stack with a freshly registered user and real network:
+`https://www.allbirds.com/products.json?limit=20` → source created (adapter `shopify`) → manual run succeeded → product (`sku:AR0007U001`, price 7.50 USD, in_stock) appears in `/products`, `/products/{id}`, `/products/{id}/history` and the frontend. Price change simulated by setting the stored price to 10.00 and re-running: history grew 1→2 rows, an alert `price_changed 10.00 → 7.50` was recorded with `email_status=sent`, and the email arrived in MailHog.
+Bug found and fixed in this pass: Shopify `products.json` has no currency, so every scrape failed `missing required field: currency`.
+Note: `https://shop.polymer-project.org` now returns 404 and is not usable; some Shopify stores answer 429/403 to automated clients.
 
-Scheduler hanya memproses task yang due.
+## 9. Known limitations / not done
 
-Task yang sudah terminal tidak boleh dieksekusi ulang tanpa alur bisnis yang jelas.
-
-Perubahan task tidak boleh merusak riwayat run yang sudah ada.
-
-3.3 Scheduler
-Scheduler menjalankan loop periodik dengan konfigurasi berikut:
-
-Parameter	Nilai default
-Heartbeat interval	15 detik
-Claim interval	10 detik
-Claim batch size	20
-Reconciliation interval	120 detik
-Retention purge interval	3600 detik
-History retention	90 hari
-Tanggung jawab scheduler:
-
-Memeriksa heartbeat database dan Redis.
-
-Mengklaim schedule yang due secara atomic.
-
-Membuat run eksekusi.
-
-Mengirim pekerjaan ke worker.
-
-Melakukan rekonsiliasi task/run yang tertinggal.
-
-Menjalankan retention purge untuk observasi, task, dan run lama.
-
-Log scheduler yang sudah aktif menunjukkan:
-
-text
-scheduler starting
-scheduler heartbeat db_ok=true redis_ok=true
-scheduler claimed due schedules
-retention purge completed
-3.4 Worker HTTP
-Worker mengeksekusi task scraping melalui Celery. Ia bertanggung jawab atas validasi target, fetch HTTP, persistence hasil, retry, dan koordinasi politeness.
-
-Aturan worker:
-
-Worker harus memperoleh execution lease sebelum mengeksekusi task.
-
-Worker harus memvalidasi URL target untuk mencegah SSRF.
-
-Worker harus menyimpan observasi hasil fetch.
-
-Worker harus menangani retry dan dead-letter.
-
-Worker harus menghormati rate limit, cooldown, dan concurrency per-domain.
-
-Worker tidak boleh menganggap lease tetap valid selama request berjalan; lease harus diperbarui dan diverifikasi.
-
-4. Politeness dan Koordinasi Domain
-4.1 Tujuan
-Sistem membatasi beban terhadap target eksternal agar scraping tetap sopan, dapat diprediksi, dan tidak menimbulkan lonjakan request pada satu hostname.
-
-Konfigurasi aktif:
-
-Parameter	Nilai default
-task_execution_lease_seconds	60
-domain_max_concurrency	3
-domain_rate_limit_seconds	2
-domain_cooldown_seconds	600
-4.2 Execution lease
-Execution lease adalah lock per task berbasis Redis.
-
-Key: scraper:task-execution:<task_id>
-
-Token: UUID acak per attempt.
-
-TTL: 60 detik secara default.
-
-Acquire memakai SET key token EX ttl NX.
-
-Renew dan release memakai Lua compare-and-act.
-
-Worker lama tidak dapat memperpanjang atau menghapus lease milik worker baru.
-
-Redis gagal berarti CoordinationUnavailableError; worker harus berhenti, bukan melanjutkan tanpa koordinasi.
-
-4.3 Domain semaphore
-Domain semaphore membatasi jumlah request aktif per hostname.
-
-Key: scraper:domain-semaphore:<hostname>
-
-Struktur: Redis sorted set.
-
-Member: token kepemilikan.
-
-Score: timestamp kedaluwarsa slot dalam milidetik.
-
-Kapasitas: domain_max_concurrency, default 3.
-
-Slot kedaluwarsa dibersihkan sebelum acquire.
-
-Acquire hanya berhasil bila jumlah slot aktif di bawah kapasitas.
-
-Renew hanya berhasil bila token masih ada.
-
-Release hanya berhasil bila token masih dimiliki.
-
-Redis gagal berarti fail-closed.
-
-Implementasi sudah ada di:
-
-text
-backend/app/workers/domain_semaphore.py
-backend/tests/test_domain_semaphore.py
-Commit checkpoint:
-
-text
-7fc23e6 feat(politeness): add Redis domain semaphore
-4.4 Rate limit per-domain
-Rate limit mencegah request terlalu rapat pada satu hostname.
-
-Jeda minimum antar-request: domain_rate_limit_seconds, default 2 detik.
-
-Implementasi berbasis Redis.
-
-Worker harus menunggu atau gagal aman bila limit belum tersedia.
-
-Rate limit harus bekerja bersama semaphore, bukan menggantikannya.
-
-4.5 Cooldown domain
-Cooldown dipakai setelah kegagalan tertentu, khususnya kondisi server yang menyarankan backoff.
-
-Key cooldown per hostname.
-
-TTL default: 600 detik.
-
-Cooldown dapat dibuat.
-
-Cooldown dapat diperpanjang.
-
-Cooldown tidak boleh dipendekkan oleh update berikutnya.
-
-Update bersamaan harus aman.
-
-HTTP 503 persisten setelah tiga attempt harus berakhir dead-letter.
-
-Parsing header Retry-After belum diimplementasikan.
-
-Implementasi dan test sudah ada di:
-
-text
-backend/app/workers/domain_rate_limit.py
-backend/tests/test_domain_cooldown.py
-backend/tests/test_domain_rate_limit.py
-Commit checkpoint:
-
-text
-1d91839 test(politeness): verify domain cooldown with real Redis
-5. Struktur Database
-5.1 Entitas inti
-Entitas	Peran
-users	Akun pengguna dan identitas autentikasi
-tasks	Definisi pekerjaan scraping milik user
-runs	Satu eksekusi task
-task_observations	Observasi hasil, status, error, atau metrik eksekusi
-schedules	Jadwal eksekusi task
-dead_letter	Task/run yang gagal permanen setelah retry
-5.2 Relasi logis
-text
-users 1---N tasks
-tasks 1---N schedules
-tasks 1---N runs
-runs 1---N task_observations
-tasks/runs 1---N dead_letter_records
-5.3 Aturan data
-Setiap resource user-owned harus memiliki user_id.
-
-Task harus dapat dilacak dari schedule, run, observasi, dan dead-letter.
-
-Run harus menyimpan status eksekusi dan waktu.
-
-Observasi harus menyimpan hasil atau kegagalan granular.
-
-Dead-letter harus menyimpan alasan kegagalan dan konteks attempt.
-
-Retention harus menghapus observasi, task, dan run lama tanpa merusak integritas data aktif.
-
-6. Aturan Bisnis
-6.1 Eksekusi task
-Task hanya boleh dieksekusi oleh worker yang memegang execution lease.
-
-Dua worker tidak boleh aktif mengeksekusi task yang sama secara bersamaan.
-
-Lease kedaluwarsa tidak otomatis berarti request boleh dilanjutkan; worker harus memverifikasi kepemilikan sebelum melanjutkan.
-
-Jika lease hilang saat request masih berjalan, worker harus menghentikan atau membatalkan request.
-
-Task yang gagal dapat diretry sesuai policy.
-
-Kegagalan persisten setelah batas attempt harus masuk dead-letter.
-
-6.2 Politeness
-Maksimum request aktif per hostname adalah 3.
-
-Jeda minimum antar-request per hostname adalah 2 detik.
-
-Cooldown default setelah kondisi tertentu adalah 600 detik.
-
-Cooldown tidak boleh dipendekkan.
-
-HTTP 503 persisten setelah tiga attempt harus dead-letter.
-
-Parsing Retry-After harus ditambahkan sebagai bagian dari politeness.
-
-6.3 Keamanan
-JWT secret wajib berasal dari environment.
-
-Target URL harus divalidasi untuk mencegah SSRF.
-
-Hostname yang resolve ke private, loopback, atau link-local address harus diblokir.
-
-Mock Store internal tetap diizinkan sebagai dependency development.
-
-Redis dan database harus dianggap dependensi kritikal; kegagalan koneksi harus fail-closed untuk operasi koordinasi.
-
-6.4 Retensi
-History retention default: 90 hari.
-
-Retention purge berjalan setiap 3600 detik.
-
-Retention dapat menghapus observasi, task, dan run lama.
-
-Retention tidak boleh menghapus data aktif atau data yang masih diperlukan untuk audit.
-
-7. Desain UI/UX
-7.1 Prinsip
-Frontend harus sederhana, operasional, dan berfokus pada monitoring. User harus dapat memahami kondisi task dan run tanpa membuka log backend.
-
-Prinsip UI:
-
-Status harus jelas: idle, scheduled, running, succeeded, failed, dead-letter.
-
-Error harus dapat dibaca, bukan hanya stack trace mentah.
-
-Setiap task harus menampilkan riwayat run.
-
-Setiap run harus menampilkan observasi dan penyebab kegagalan.
-
-Aksi destruktif harus meminta konfirmasi.
-
-Loading, empty state, error state, dan unauthorized state wajib ada.
-
-7.2 Halaman utama
-Halaman	Tujuan
-Login/Register	Autentikasi user
-Dashboard	Ringkasan task, run, keberhasilan, dan kegagalan
-Tasks	Daftar dan manajemen task
-Task Detail	Konfigurasi, schedule, run, dan status task
-Run Detail	Observasi, error, retry, dan hasil eksekusi
-Dead Letter	Daftar kegagalan permanen dan penyebabnya
-Settings	Konfigurasi akun dan preferensi user
-7.3 Komponen penting
-Task card dengan status dan waktu eksekusi berikutnya.
-
-Run timeline.
-
-Badge status.
-
-Error panel.
-
-Retry indicator.
-
-Dead-letter indicator.
-
-Form validasi inline.
-
-Empty state.
-
-Loading skeleton.
-
-Toast/notifikasi hasil aksi.
-
-8. API
-8.1 Auth
-Endpoint	Metode	Fungsi
-/auth/register	POST	Registrasi user
-/auth/login	POST	Login dan terbit JWT
-/auth/me	GET	Profil user aktif
-8.2 Task dan run
-Endpoint	Metode	Fungsi
-/tasks	GET	Daftar task user
-/tasks	POST	Buat task
-/tasks/{id}	GET	Detail task
-/tasks/{id}	PATCH	Update task
-/tasks/{id}	DELETE	Hapus task
-/tasks/{id}/runs	GET	Riwayat run task
-/runs/{id}	GET	Detail run
-/runs/{id}/observations	GET	Observasi run
-Endpoint di atas adalah kontrak fungsional yang menjadi target implementasi; detail path final harus mengikuti router yang sudah ada di backend.
-
-9. Fitur yang Sudah Selesai
-9.1 Infrastruktur
-Docker Compose dengan PostgreSQL, PgBouncer, Redis, API, scheduler, worker, frontend, mock store, dan MailHog.
-
-Health check service.
-
-Script scripts/wait_for_healthy.sh.
-
-Scheduler heartbeat dengan pemeriksaan db_ok dan redis_ok.
-
-Retention purge aktif.
-
-Scheduler claim due schedules aktif.
-
-9.2 Backend
-Autentikasi JWT.
-
-Konfigurasi Phase 3 untuk lease dan politeness.
-
-Execution lease Redis token-based.
-
-Renew dan release lease berbasis Lua.
-
-CoordinationUnavailableError dan LeaseOwnershipLostError.
-
-Durable task dan persistence state.
-
-Retry dan dead-letter untuk HTTP 503 persisten setelah tiga attempt.
-
-Domain rate limit Redis.
-
-Domain cooldown Redis.
-
-Domain semaphore Redis.
-
-Validasi target untuk SSRF hardening.
-
-9.3 Testing
-Integration test cooldown Redis nyata.
-
-Integration test semaphore Redis nyata.
-
-Test kapasitas semaphore.
-
-Test kepemilikan token.
-
-Test renewal dan release.
-
-Test expiry member dan expiry key.
-
-Test concurrent update cooldown.
-
-Test cooldown tidak boleh dipendekkan.
-
-Test rate limit.
-
-128 integration tests lulus pada checkpoint a0d93ad.
-
-31 test politeness lulus pada checkpoint 7fc23e6.
-
-9.4 Checkpoint commit
-text
-a0d93ad test(politeness): verify persistent HTTP 503 dead-letter
-1d91839 test(politeness): verify domain cooldown with real Redis
-7fc23e6 feat(politeness): add Redis domain semaphore
-10. Fitur yang Belum Selesai
-10.1 Prioritas tinggi
-Fitur	Status	Keterangan
-Integrasi semaphore ke request worker	Belum	Semaphore sudah ada, tetapi belum dipakai worker saat fetch
-Supervised lease renewal	Belum	Worker harus memperbarui lease secara berkala selama request berjalan
-Pembatalan request saat lease hilang	Belum	Request harus dihentikan bila kepemilikan lease tidak lagi valid
-Integrasi cooldown ke request worker	Belum	Cooldown harus memblokir fetch saat hostname sedang cooldown
-Integrasi rate limit ke request worker	Belum	Worker harus menghormati jeda minimum per-domain
-Parsing Retry-After	Belum	Header harus diparse dan dipakai untuk backoff
-Cleanup semaphore pada fetch selesai	Belum	Slot harus dilepas saat sukses, gagal, atau dibatalkan
-Dead-letter dari politeness failure	Perlu diverifikasi	Alur kegagalan politeness harus konsisten dengan retry/dead-letter
-10.2 Prioritas menengah
-Fitur	Status	Keterangan
-Dashboard metrik operasional	Belum lengkap	Success rate, failure rate, retry, dead-letter
-Halaman dead-letter UI	Belum lengkap	User harus dapat melihat penyebab kegagalan
-Halaman run detail UI	Belum lengkap	Observasi dan status run harus terlihat jelas
-Notifikasi kegagalan	Belum	Email atau notifikasi saat task masuk dead-letter
-Manajemen schedule UI	Belum lengkap	User harus dapat mengatur jadwal task
-Audit log	Belum	Perubahan task dan aksi user perlu tercatat
-Rate limiting API	Belum	Endpoint publik perlu dilindungi dari abuse
-10.3 Prioritas lanjutan
-Fitur	Status	Keterangan
-Multi-tenant quota	Belum	Batas task, run, dan resource per user
-Billing/plan	Belum	Paket SaaS dan pembatasan penggunaan
-Webhook notifikasi	Belum	Notifikasi eksternal saat run selesai/gagal
-Export hasil scraping	Belum	CSV/JSON export
-Retry policy per-task	Belum	Konfigurasi retry granular per task
-Observability dashboard	Belum	Metrik worker, queue, dan politeness
-Deployment produksi	Belum	Secret management, monitoring, backup, dan CI/CD produksi
-11. Urutan Kerja Berikutnya
-Integrasi domain_semaphore ke request worker.
-
-Tambahkan supervised lease renewal selama request berjalan.
-
-Hentikan request bila lease ownership hilang.
-
-Integrasi rate limit dan cooldown ke alur fetch.
-
-Lepas semaphore slot pada fetch sukses, gagal, dan dibatalkan.
-
-Implementasi parsing Retry-After.
-
-Pastikan retry dan dead-letter konsisten untuk semua jenis kegagalan politeness.
-
-Tambahkan integration test end-to-end untuk worker + politeness.
-
-Lengkapi UI monitoring task, run, dan dead-letter.
-
-Tambahkan observability dan alerting.
-
-12. Definisi Selesai
-Fitur politeness dianggap selesai bila:
-
-Worker memperoleh semaphore sebelum fetch.
-
-Worker menghormati rate limit per-domain.
-
-Worker tidak mengeksekusi fetch saat hostname cooldown.
-
-Lease diperbarui selama request berjalan.
-
-Request dihentikan bila lease hilang.
-
-Semaphore dilepas pada semua jalur keluar: sukses, gagal, timeout, dan pembatalan.
-
-Retry-After diparse dan dipakai.
-
-HTTP 503 persisten berakhir dead-letter.
-
-Semua jalur memiliki integration test Redis nyata.
-
-Ruff, mypy, dan test terkait lulus.
+- One product per source (first record of a multi-product feed).
+- worker-browser / worker-notifications / worker-exports are stubs; no JS-rendered scraping.
+- No billing/quotas, webhooks, exports, audit log, or production deployment hardening.
+- Email verification is not implemented (`is_verified` stays false).
+- Lease renewal during long fetches and Retry-After-based cooldown are covered by earlier phase-3 work; see `docs/design/19-phase-3-reliability-and-politeness-plan.md` for remaining intent.

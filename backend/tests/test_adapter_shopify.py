@@ -117,8 +117,34 @@ async def test_fetch_uses_json_endpoint(monkeypatch: pytest.MonkeyPatch) -> None
 
     monkeypatch.setattr(fetcher, "fetch", fake)
     page = await ShopifyAdapter().fetch("https://shop.example.com/products/blue-mug")
-    assert calls == ["https://shop.example.com/products/blue-mug.json"]
+    assert calls == [
+        "https://shop.example.com/products/blue-mug.json",
+        "https://shop.example.com/meta.json",
+    ]
     assert ShopifyAdapter().parse(page)[0]["product_name"] == "Blue Mug"
+
+
+def test_parse_defaults_currency_to_usd() -> None:
+    out = ShopifyAdapter().parse(_page(json.dumps({"products": [PRODUCT]})))
+    assert out[0]["price_currency"] == "USD"
+    assert normalize(out[0], "https://shop.example.com/products.json").currency == "USD"
+
+
+async def test_fetch_reads_currency_from_meta_json(monkeypatch: pytest.MonkeyPatch) -> None:
+    real = fetcher.fetch
+
+    async def fake(url: str, **_: object) -> RawPage:
+        def handler(req: httpx.Request) -> httpx.Response:
+            if req.url.path == "/meta.json":
+                return httpx.Response(200, text=json.dumps({"currency": "EUR"}))
+            return httpx.Response(200, text=json.dumps({"products": [PRODUCT]}))
+
+        monkeypatch.setattr(fetcher, "_check_url_allowed", lambda u: None)
+        return await real(url, transport=httpx.MockTransport(handler))
+
+    monkeypatch.setattr(fetcher, "fetch", fake)
+    page = await ShopifyAdapter().fetch("https://shop.example.com/products.json")
+    assert ShopifyAdapter().parse(page)[0]["price_currency"] == "EUR"
 
 
 async def test_fetch_falls_back_to_html_when_json_disabled(
