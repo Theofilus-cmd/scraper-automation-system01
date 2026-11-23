@@ -7,8 +7,10 @@ in local development.
 """
 
 from functools import lru_cache
+from typing import Annotated
 
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import field_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -29,7 +31,9 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://scraper:change-me-locally@pgbouncer:6432/scraper"
     redis_url: str = "redis://redis:6379/0"
 
-    cors_allow_origins: list[str] = ["http://localhost:3000"]
+    # List settings accept a JSON array or a plain comma-separated string
+    # (e.g. SSRF_ALLOWED_HOSTS=mock-store,other-internal-host).
+    cors_allow_origins: Annotated[list[str], NoDecode] = ["http://localhost:3000"]
 
     scheduler_heartbeat_interval_seconds: int = 15
 
@@ -83,7 +87,28 @@ class Settings(BaseSettings):
     # site") -- this is the one, narrow, explicit exception, checked
     # before the private-IP rule (app/scraping/fetcher.py). Real internal
     # services (Postgres/Redis/etc.) are never added here.
-    ssrf_allowed_hosts: list[str] = ["mock-store"]
+    # Set SSRF_ALLOWED_HOSTS= (empty) in any non-development deployment.
+    ssrf_allowed_hosts: Annotated[list[str], NoDecode] = ["mock-store"]
+
+    # --- Auth abuse protection (Redis fixed window) -----------------------
+    # Applied per client IP to /auth/register and /auth/login, and per
+    # email to /auth/login. Fails open (with a warning) if Redis is down so
+    # an outage cannot lock every user out.
+    auth_rate_limit_enabled: bool = True
+    auth_rate_limit_attempts: int = 10
+    auth_rate_limit_window_seconds: int = 60
+
+    @field_validator("cors_allow_origins", "ssrf_allowed_hosts", mode="before")
+    @classmethod
+    def _split_csv(cls, value: object) -> object:
+        if isinstance(value, str):
+            text = value.strip()
+            if text.startswith("["):
+                import json
+
+                return json.loads(text)
+            return [item.strip() for item in text.split(",") if item.strip()]
+        return value
 
     # doc 03 §4: "a clear, honest User-Agent identifying the bot and
     # linking to an info/contact page... we do not spoof a generic

@@ -133,6 +133,13 @@ services:
       # network call) runs in the API process, so it needs this too, even
       # though the API never calls mock-store directly.
       MOCK_STORE_BASE_URL: ${MOCK_STORE_BASE_URL:-http://mock-store:4000}
+      # Hosts exempt from the private-IP SSRF block (comma-separated).
+      # Development only: set to empty outside local development.
+      SSRF_ALLOWED_HOSTS: ${SSRF_ALLOWED_HOSTS-mock-store}
+      CORS_ALLOW_ORIGINS: ${CORS_ALLOW_ORIGINS:-http://localhost:3000}
+      AUTH_RATE_LIMIT_ENABLED: ${AUTH_RATE_LIMIT_ENABLED:-true}
+      AUTH_RATE_LIMIT_ATTEMPTS: ${AUTH_RATE_LIMIT_ATTEMPTS:-10}
+      AUTH_RATE_LIMIT_WINDOW_SECONDS: ${AUTH_RATE_LIMIT_WINDOW_SECONDS:-60}
 
     ports:
       - "8000:8000"
@@ -190,6 +197,12 @@ services:
       # process rather than a separate service.
       HISTORY_RETENTION_DAYS: ${HISTORY_RETENTION_DAYS:-90}
       RETENTION_PURGE_INTERVAL_SECONDS: ${RETENTION_PURGE_INTERVAL_SECONDS:-3600}
+      # Phase 3 (doc 19): lease + per-domain politeness. Read by the worker
+      # (and the scheduler's recovery checks), so they must be passed here.
+      TASK_EXECUTION_LEASE_SECONDS: ${TASK_EXECUTION_LEASE_SECONDS:-60}
+      DOMAIN_MAX_CONCURRENCY: ${DOMAIN_MAX_CONCURRENCY:-3}
+      DOMAIN_RATE_LIMIT_SECONDS: ${DOMAIN_RATE_LIMIT_SECONDS:-2}
+      DOMAIN_COOLDOWN_SECONDS: ${DOMAIN_COOLDOWN_SECONDS:-600}
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -217,6 +230,16 @@ services:
       # Phase 1 (doc 17): scrape_source_url's real target -- the only
       # process that ever actually calls mock-store over HTTP.
       MOCK_STORE_BASE_URL: ${MOCK_STORE_BASE_URL:-http://mock-store:4000}
+      # Phase 3 (doc 19): lease + per-domain politeness. Read by the worker
+      # (and the scheduler's recovery checks), so they must be passed here.
+      TASK_EXECUTION_LEASE_SECONDS: ${TASK_EXECUTION_LEASE_SECONDS:-60}
+      DOMAIN_MAX_CONCURRENCY: ${DOMAIN_MAX_CONCURRENCY:-3}
+      DOMAIN_RATE_LIMIT_SECONDS: ${DOMAIN_RATE_LIMIT_SECONDS:-2}
+      DOMAIN_COOLDOWN_SECONDS: ${DOMAIN_COOLDOWN_SECONDS:-600}
+      # Hosts exempt from the private-IP SSRF block (comma-separated).
+      # Development only: set to empty outside local development.
+      SSRF_ALLOWED_HOSTS: ${SSRF_ALLOWED_HOSTS-mock-store}
+      SCRAPER_USER_AGENT: ${SCRAPER_USER_AGENT:-ScraperAutomationBot/0.1 (+https://example.com/bot)}
     depends_on:
       migrate:
         condition: service_completed_successfully

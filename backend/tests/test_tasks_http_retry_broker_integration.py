@@ -9,6 +9,7 @@ from sqlalchemy import func, select
 from app.db.models.lifecycle import ObservationHistory, Run, Task
 from app.db.session import get_session
 from app.workers.async_bridge import run_async
+from app.workers.domain_rate_limit import get_domain_rate_redis_client
 from app.workers.tasks_http import scrape_source_url
 from tests.factories import (
     MOCK_STORE_BASE_URL,
@@ -18,6 +19,19 @@ from tests.factories import (
 )
 
 pytestmark = pytest.mark.integration
+
+_COOLDOWN_KEY = "scraper:domain-cooldown:mock-store"
+
+
+async def _expire_mock_store_cooldown() -> None:
+    """A 503 now starts a 10-minute per-host cooldown (doc 19). These tests
+    verify retry/dead-letter bookkeeping, so they simulate that cooldown
+    having elapsed instead of waiting for it."""
+    client = get_domain_rate_redis_client()
+    try:
+        await client.eval('return redis.call("DEL", KEYS[1])', 1, _COOLDOWN_KEY)
+    finally:
+        await client.aclose()
 
 
 @pytest.mark.parametrize(
@@ -82,10 +96,13 @@ def test_real_broker_retry_outcomes(
         last_state = run_async(durable_state(run_id, task_id))
         if last_state[0] in ("succeeded", "failed", "dead_letter"):
             break
+        run_async(_expire_mock_store_cooldown())
         time.sleep(0.25)
     else:
+        run_async(_expire_mock_store_cooldown())
         raise AssertionError(
             f"Broker retry did not finish within 60 seconds: {last_state!r}"
         )
+    run_async(_expire_mock_store_cooldown())
 
     assert last_state == expected_state

@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import BaseModel, EmailStr, Field
 
 from app.api.dependencies import CurrentUser
 from app.core.config import get_settings
+from app.core.rate_limit import enforce_rate_limit
 from app.core.security import create_access_token, hash_password, verify_password
 from app.db.models.identity_repository import (
     EmailAlreadyRegisteredError,
@@ -48,6 +49,12 @@ class RegisterResponse(BaseModel):
     token: TokenResponse
 
 
+def _client_ip(request: Request) -> str:
+    # Direct peer address only: X-Forwarded-For is client-controlled and is
+    # deliberately not trusted without a configured trusted proxy.
+    return request.client.host if request.client else "unknown"
+
+
 def _token_response(user_id: str) -> TokenResponse:
     settings = get_settings()
     return TokenResponse(
@@ -72,8 +79,9 @@ def _user_response(
 
 
 @router.post("/register", response_model=RegisterResponse, status_code=status.HTTP_201_CREATED)
-async def register(body: RegisterRequest) -> RegisterResponse:
+async def register(body: RegisterRequest, request: Request) -> RegisterResponse:
     """Create a user, their personal workspace, and an access token."""
+    await enforce_rate_limit("register:ip", _client_ip(request))
     async with get_session() as session:
         try:
             user, workspace = await create_user_with_personal_workspace(
@@ -101,8 +109,10 @@ async def register(body: RegisterRequest) -> RegisterResponse:
 
 
 @router.post("/login", response_model=TokenResponse)
-async def login(body: LoginRequest) -> TokenResponse:
+async def login(body: LoginRequest, request: Request) -> TokenResponse:
     """Authenticate an active user and return a short-lived access token."""
+    await enforce_rate_limit("login:ip", _client_ip(request))
+    await enforce_rate_limit("login:email", str(body.email).strip().lower())
     async with get_session() as session:
         user = await get_user_by_email(session, str(body.email))
 

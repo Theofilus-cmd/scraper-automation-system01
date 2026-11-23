@@ -73,6 +73,14 @@ async def _deactivate_fixture_schedules() -> None:
 
 
 @pytest.fixture(autouse=True)
+def _disable_auth_rate_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Most tests hit /auth from one client IP; rate-limit tests opt back in."""
+    from app.core.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "auth_rate_limit_enabled", False)
+
+
+@pytest.fixture(autouse=True)
 async def _dispose_db_engine_after_test(
     request: pytest.FixtureRequest,
 ) -> AsyncIterator[None]:
