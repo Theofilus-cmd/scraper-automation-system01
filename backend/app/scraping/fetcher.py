@@ -56,9 +56,17 @@ class FetchError(Exception):
     the caller to use its configured retry policy.
     """
 
-    def __init__(self, reason: str, message: str, *, retry_after: float | None = None) -> None:
+    def __init__(
+        self,
+        reason: str,
+        message: str,
+        *,
+        retry_after: float | None = None,
+        status_code: int | None = None,
+    ) -> None:
         self.reason = reason
         self.retry_after = retry_after
+        self.status_code = status_code
         super().__init__(message)
 
 
@@ -188,9 +196,14 @@ async def fetch(url: str, *, transport: httpx.AsyncBaseTransport | None = None) 
                     "network_error",
                     f"server returned {response.status_code}",
                     retry_after=_parse_retry_after_seconds(response.headers.get("retry-after")),
+                    status_code=response.status_code,
                 )
             if response.status_code >= 500:
-                raise FetchError("network_error", f"server returned {response.status_code}")
+                raise FetchError(
+                    "network_error",
+                    f"server returned {response.status_code}",
+                    status_code=response.status_code,
+                )
 
             return RawPage(
                 html=response.text,

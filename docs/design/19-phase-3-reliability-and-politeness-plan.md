@@ -132,3 +132,25 @@ duplicate dispatch tidak membuat fetch, history, atau progress counter ganda.
 Phase 3 tidak mencakup adapter baru, browser automation, email alert, diff
 engine, billing, export, API key, remote Git hosting, atau redesign menjadi
 multi-task run.
+
+## Amendment (scope extension, approved by product owner)
+
+Phase 3 continues past the original non-goals into an MVP push, in order:
+(A) wire politeness into the worker, (B) config/security hardening,
+(C) Shopify adapter, (D) price/stock alerts with email, (E) frontend
+dashboard, (F) end-to-end validation. Amazon is explicitly deferred.
+
+### Module A implementation notes
+
+- `app/workers/politeness.py::polite_fetch` wraps each fetch: cooldown check,
+  domain semaphore, rate slot, then fetch under a deadline of 75% of the
+  lease TTL; the semaphore slot is released on success, failure, timeout
+  and cancellation. Redis failure is fail-closed.
+- A politeness deferral (`domain_cooldown`, `domain_busy`,
+  `domain_rate_limited`) hands the durable attempt back, re-queues the row,
+  and re-dispatches with a Celery countdown. After 20 deferrals the task is
+  dead-lettered.
+- HTTP 429/503 start/extend the per-host cooldown (never shortened) using
+  `Retry-After` when larger than the default.
+- Politeness is keyed on the source URL host; redirect hops are SSRF-checked
+  but not individually throttled.

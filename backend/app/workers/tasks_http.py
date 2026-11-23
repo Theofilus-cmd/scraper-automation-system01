@@ -64,6 +64,7 @@ from app.workers.coordination import (
     release_task_execution_lease,
     renew_task_execution_lease,
 )
+from app.workers.politeness import DomainDeferredError, polite_fetch
 from app.workers.retry_policy import calculate_retry_delay
 
 logger = get_logger(__name__)
@@ -227,6 +228,23 @@ async def _mark_task_retrying(
         return True
 
 
+async def _release_attempt_for_deferral(task_id: uuid.UUID) -> None:
+    """Politeness deferral is not a failed attempt: hand the attempt back
+    and re-queue the durable row so the attempt budget is untouched."""
+    async with get_session() as session:
+        task = (
+            await session.execute(
+                select(TaskRow).where(TaskRow.id == task_id).with_for_update()
+            )
+        ).scalar_one()
+        if task.status in TASK_TERMINAL_STATUSES:
+            return
+        task.status = "queued"
+        task.queued_at = _utcnow()
+        task.attempt_count = max(0, task.attempt_count - 1)
+        await session.commit()
+
+
 async def _finalize_task(
     task_id: uuid.UUID,
     run_id: uuid.UUID,
@@ -372,7 +390,17 @@ async def _scrape_source_url_for_task(task_id: uuid.UUID, *, attempt: int) -> di
         return {"status": "failed", "error_reason": "unsupported_adapter"}
 
     try:
-        page = await adapter.fetch(context.source_url, FetchContext())
+        page = await polite_fetch(
+            context.source_url,
+            lambda: adapter.fetch(context.source_url, FetchContext()),
+        )
+    except DomainDeferredError as exc:
+        await _release_attempt_for_deferral(task_id)
+        logger.info(
+            "scrape deferred by domain politeness",
+            extra={"task_id": str(task_id), "reason": exc.reason, "delay": exc.delay},
+        )
+        return {"status": "deferred_domain", "reason": exc.reason, "delay": exc.delay}
     except FetchError as exc:
         if exc.reason in TASK_TRANSIENT_REASONS:
             if await _task_attempt_budget_exhausted(task_id):
@@ -552,7 +580,9 @@ async def _scrape_source_url_for_task_with_lease(
     bind=True,
     max_retries=2,
 )
-def scrape_source_url(self: CeleryTask, task_id: str) -> dict[str, Any]:
+def scrape_source_url(
+    self: CeleryTask, task_id: str, defer_count: int = 0
+) -> dict[str, Any]:
     """doc 18 §5.2: `max_retries=2` (2 retries + the first attempt =
     `max_attempts=3`, doc 07 §3). Manual retries use explicit
     capped backoff with jitter based on the durable attempt count.
@@ -619,5 +649,38 @@ def scrape_source_url(self: CeleryTask, task_id: str) -> dict[str, Any]:
             return {"status": "already_finalized"}
         raise self.retry(exc=exc, countdown=retry_delay) from exc
 
+    if result.get("status") == "deferred_domain":
+        return _redispatch_after_domain_deferral(self, task_uuid, result, defer_count)
+
     logger.info("scrape task finished", extra={"task_id": task_id, "status": result.get("status")})
     return result
+
+
+# A task deferred this many times by politeness (cooldown/semaphore/rate)
+# gives up as a dead-letter rather than bouncing forever.
+MAX_POLITENESS_DEFERRALS = 20
+
+
+def _redispatch_after_domain_deferral(
+    task: CeleryTask, task_uuid: uuid.UUID, result: dict[str, Any], defer_count: int
+) -> dict[str, Any]:
+    reason = str(result["reason"])
+    if defer_count >= MAX_POLITENESS_DEFERRALS:
+        context = run_async(_load_task_context(task_uuid))
+        if context is not None:
+            run_async(
+                _finalize_task_dead_letter(
+                    task_uuid,
+                    context.run_id,
+                    reason="network_error",
+                    message=f"domain politeness deferred this task {defer_count} times ({reason})",
+                )
+            )
+        return {"status": "failed", "error_reason": "network_error", "dead_letter": True}
+
+    task.apply_async(
+        args=(str(task_uuid),),
+        kwargs={"defer_count": defer_count + 1},
+        countdown=float(result["delay"]),
+    )
+    return {"status": "deferred", "reason": reason}
