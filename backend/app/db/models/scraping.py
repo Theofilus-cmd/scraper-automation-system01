@@ -71,7 +71,9 @@ class Source(Base):
 
     __tablename__ = "sources"
     __table_args__ = (
-        CheckConstraint("adapter_type IN ('mock_store')", name="ck_sources_adapter_type"),
+        CheckConstraint(
+            "adapter_type IN ('mock_store', 'shopify')", name="ck_sources_adapter_type"
+        ),
         CheckConstraint(f"status IN {SOURCE_STATUSES!r}", name="ck_sources_status"),
     )
     Index("ix_sources_workspace_id", "workspace_id"),
