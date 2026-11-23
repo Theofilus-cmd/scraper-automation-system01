@@ -69,3 +69,55 @@ async def test_extend_uses_configured_or_server_floor(
 async def test_extend_rejects_missing_ttl() -> None:
     with pytest.raises(CoordinationUnavailableError):
         await extend_domain_cooldown("example.com", client=FakeRedis(-1))
+
+
+@pytest.mark.integration
+async def test_real_redis_cooldown_never_shortens() -> None:
+    import asyncio
+    import time
+    import uuid
+
+    from app.core.config import get_settings
+    from app.workers.domain_rate_limit import get_domain_rate_redis_client
+
+    hostname = f"cooldown-test-{uuid.uuid4().hex}.example.test"
+    client = get_domain_rate_redis_client()
+    floor = float(get_settings().domain_cooldown_seconds)
+    longer = max(floor, 1.0) + 300.0
+    longest = longer + 300.0
+    started = time.monotonic()
+
+    def assert_remaining(actual: float, requested: float) -> None:
+        elapsed = time.monotonic() - started
+        assert requested - elapsed - 1.0 <= actual <= requested
+
+    try:
+        assert await get_domain_cooldown_wait(hostname, client=client) == 0.0
+
+        initial = await extend_domain_cooldown(hostname, client=client)
+        assert_remaining(initial, floor)
+
+        extended = await extend_domain_cooldown(
+            hostname, client=client, retry_after=longer
+        )
+        assert_remaining(extended, longer)
+
+        shorter = await extend_domain_cooldown(
+            hostname, client=client, retry_after=1.0
+        )
+        assert_remaining(shorter, longer)
+
+        waits = await asyncio.gather(
+            extend_domain_cooldown(
+                hostname, client=client, retry_after=longest
+            ),
+            extend_domain_cooldown(
+                hostname, client=client, retry_after=1.0
+            ),
+        )
+        assert all(wait > 0 for wait in waits)
+
+        remaining = await get_domain_cooldown_wait(hostname, client=client)
+        assert_remaining(remaining, longest)
+    finally:
+        await client.aclose()
