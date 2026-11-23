@@ -36,9 +36,11 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.logging import get_logger
+from app.db.models.alerts import Alert
 from app.db.models.lifecycle import TRACKED_OBSERVATION_FIELDS, ObservationHistory
-from app.db.models.scraping import CurrentObservation, Product
+from app.db.models.scraping import CurrentObservation, Product, Source
 from app.db.session import get_session
+from app.domain.alert_detection import build_dedupe_key, detect_alerts
 from app.scraping.types import NormalizedRecord, ValidationResult
 
 logger = get_logger(__name__)
@@ -64,6 +66,7 @@ class ScrapeUpsertResult:
     product_id: uuid.UUID | None = None
     created: bool = False
     history_appended: bool = False
+    alerts_created: int = 0
 
 
 def _compute_product_identity_key(record: NormalizedRecord) -> str:
@@ -225,6 +228,58 @@ async def _upsert_current_observation(
     await session.execute(stmt)
 
 
+async def _record_alerts(
+    session: AsyncSession,
+    *,
+    source_id: uuid.UUID,
+    product_id: uuid.UUID,
+    run_id: uuid.UUID,
+    task_id: uuid.UUID,
+    change_summary: dict[str, object] | None,
+    product_name: str,
+    product_url: str,
+    currency: str,
+) -> int:
+    """Insert alert rows for price/stock changes inside the caller's
+    transaction (so an alert exists iff the observation change committed).
+    `uq_alerts_dedupe_key` + ON CONFLICT DO NOTHING makes a replay a no-op.
+    Returns how many rows were actually inserted.
+    """
+    drafts = detect_alerts(change_summary, currency=currency)
+    if not drafts:
+        return 0
+    workspace_id = (
+        await session.execute(select(Source.workspace_id).where(Source.id == source_id))
+    ).scalar_one()
+    table = cast(Table, Alert.__table__)
+    created = 0
+    for draft in drafts:
+        stmt = (
+            pg_insert(table)
+            .values(
+                workspace_id=workspace_id,
+                source_id=source_id,
+                product_id=product_id,
+                run_id=run_id,
+                task_id=task_id,
+                kind=draft.kind,
+                product_name=product_name,
+                product_url=product_url,
+                currency=draft.currency,
+                old_value=draft.old_value,
+                new_value=draft.new_value,
+                dedupe_key=build_dedupe_key(
+                    task_id=task_id, product_id=product_id, kind=draft.kind
+                ),
+            )
+            .on_conflict_do_nothing(constraint="uq_alerts_dedupe_key")
+            .returning(table.c.id)
+        )
+        if (await session.execute(stmt)).first() is not None:
+            created += 1
+    return created
+
+
 async def upsert_scrape_result(
     *,
     source_id: uuid.UUID,
@@ -307,6 +362,18 @@ async def upsert_scrape_result(
                 )
             )
 
+        alerts_created = await _record_alerts(
+            session,
+            source_id=source_id,
+            product_id=product_id,
+            run_id=run_id,
+            task_id=task_id,
+            change_summary=change_summary,
+            product_name=record.product_name,
+            product_url=record.product_url,
+            currency=record.currency,
+        )
+
         await session.commit()
         logger.info(
             "scrape result persisted",
@@ -315,6 +382,7 @@ async def upsert_scrape_result(
                 "product_id": str(product_id),
                 "product_created": created,
                 "history_appended": should_append,
+                "alerts_created": alerts_created,
             },
         )
 
@@ -325,4 +393,5 @@ async def upsert_scrape_result(
             product_id=product_id,
             created=created,
             history_appended=should_append,
+            alerts_created=alerts_created,
         )

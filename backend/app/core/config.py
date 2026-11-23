@@ -75,6 +75,21 @@ class Settings(BaseSettings):
     domain_rate_limit_seconds: int = 2
     domain_cooldown_seconds: int = 600
 
+    # --- Module D: alerts & email ----------------------------------------
+    # MailHog in dev (host `mailhog`, SMTP 1025, no auth/TLS). Set
+    # ALERTS_EMAIL_ENABLED=false to record alerts without sending mail.
+    alerts_email_enabled: bool = True
+    smtp_host: str = "mailhog"
+    smtp_port: int = 1025
+    smtp_username: str = ""
+    smtp_password: str = ""
+    smtp_use_starttls: bool = False
+    smtp_timeout_seconds: int = 10
+    notification_from_email: str = "alerts@scraper.local"
+    alert_max_delivery_attempts: int = 5
+    # A 'sending' claim older than this is presumed crashed and re-claimable.
+    alert_claim_timeout_seconds: int = 300
+
     # Phase 1 (doc 17): Compose-internal address of the mock-store service
     # -- the fetcher/adapter run inside worker-http's container, which has
     # no localhost:4000, so this must stay a Compose service name, not a

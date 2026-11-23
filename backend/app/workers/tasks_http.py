@@ -47,6 +47,7 @@ from app.db.models.lifecycle import Task as TaskRow
 from app.db.models.repository import upsert_scrape_result
 from app.db.models.scraping import Source
 from app.db.session import get_session
+from app.domain.alert_delivery import deliver_pending_alerts
 from app.domain.validation import validate
 from app.scraping.adapters import registry
 from app.scraping.fetcher import FetchError
@@ -451,12 +452,24 @@ async def _scrape_source_url_for_task(task_id: uuid.UUID, *, attempt: int) -> di
         }
 
     await _finalize_task_success(task_id, context.run_id)
+    await _deliver_alerts_best_effort()
     return {
         "status": "completed",
         "product_id": str(result.product_id),
         "created": result.created,
         "history_appended": result.history_appended,
     }
+
+
+async def _deliver_alerts_best_effort() -> None:
+    """Email any pending alerts. Runs after the task is already finalized
+    and must never change its outcome: failures stay on the alert rows
+    (pending/retry) and are retried by the next task's delivery sweep.
+    """
+    try:
+        await deliver_pending_alerts()
+    except Exception:
+        logger.exception("alert delivery sweep failed")
 
 
 async def _run_pipeline_with_lease_renewal(

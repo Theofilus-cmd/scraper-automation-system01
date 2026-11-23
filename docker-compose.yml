@@ -227,6 +227,11 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://scraper:change-me-locally@pgbouncer:6432/scraper}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      # Module D: alert email via MailHog (dev).
+      ALERTS_EMAIL_ENABLED: ${ALERTS_EMAIL_ENABLED:-true}
+      SMTP_HOST: ${SMTP_HOST:-mailhog}
+      SMTP_PORT: ${SMTP_PORT:-1025}
+      NOTIFICATION_FROM_EMAIL: ${NOTIFICATION_FROM_EMAIL:-alerts@scraper.local}
       # Phase 1 (doc 17): scrape_source_url's real target -- the only
       # process that ever actually calls mock-store over HTTP.
       MOCK_STORE_BASE_URL: ${MOCK_STORE_BASE_URL:-http://mock-store:4000}
