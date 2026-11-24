@@ -101,3 +101,28 @@ class SsrfBlockedError(DomainError):
     def __init__(self, url: str, message: str) -> None:
         self.url = url
         super().__init__(message)
+
+
+class InternalProductNotFoundError(DomainError):
+    def __init__(self, internal_product_id: uuid.UUID) -> None:
+        self.internal_product_id = internal_product_id
+        super().__init__(f"internal product not found: {internal_product_id}")
+
+
+class DuplicateSkuError(DomainError):
+    def __init__(self, sku: str) -> None:
+        self.sku = sku
+        super().__init__(f"sku already exists in workspace: {sku}")
+
+
+class ProductMatchNotFoundError(DomainError):
+    def __init__(self, match_id: uuid.UUID) -> None:
+        self.match_id = match_id
+        super().__init__(f"product match not found: {match_id}")
+
+
+class DuplicateProductMatchError(DomainError):
+    def __init__(self, internal_product_id: uuid.UUID, product_id: uuid.UUID) -> None:
+        self.internal_product_id = internal_product_id
+        self.product_id = product_id
+        super().__init__("these products are already matched")

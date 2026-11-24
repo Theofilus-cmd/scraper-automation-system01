@@ -12,8 +12,10 @@ from decimal import Decimal
 from typing import Any
 
 from app.db.models.alerts import Alert
+from app.db.models.intelligence import InternalProduct, ProductMatch
 from app.db.models.lifecycle import ObservationHistory, Run, Schedule, Task
 from app.db.models.scraping import CurrentObservation, Product, Source
+from app.domain.price_intelligence import IntelligenceResult
 
 
 def _iso(value: datetime | None) -> str | None:
@@ -159,3 +161,99 @@ def alert_to_dict(alert: Alert) -> dict[str, Any]:
         "sent_at": _iso(alert.sent_at),
         "created_at": _iso(alert.created_at),
     }
+
+
+def internal_product_to_dict(item: InternalProduct) -> dict[str, Any]:
+    return {
+        "id": str(item.id),
+        "name": item.name,
+        "sku": item.sku,
+        "barcode": item.barcode,
+        "brand": item.brand,
+        "category": item.category,
+        "own_price": _num(item.own_price),
+        "map_price": _num(item.map_price),
+        "currency": item.currency,
+        "status": item.status,
+        "created_at": _iso(item.created_at),
+        "updated_at": _iso(item.updated_at),
+    }
+
+
+def _competitor_dict(row: dict[str, Any]) -> dict[str, Any]:
+    product, source, obs = row["product"], row["source"], row["observation"]
+    return {
+        "product_id": str(product.id),
+        "source_id": str(source.id),
+        "adapter_type": source.adapter_type,
+        "product_url": product.product_url,
+        "sku": product.sku,
+        "product_name": obs.product_name if obs is not None else None,
+        "price": _num(obs.price) if obs is not None else None,
+        "currency": obs.currency if obs is not None else None,
+        "stock_status": obs.stock_status if obs is not None else None,
+        "is_valid": obs.is_valid if obs is not None else None,
+        "scraped_at": _iso(obs.scraped_at) if obs is not None else None,
+    }
+
+
+def match_to_dict(match: ProductMatch, row: dict[str, Any] | None) -> dict[str, Any]:
+    return {
+        "id": str(match.id),
+        "internal_product_id": str(match.internal_product_id),
+        "product_id": str(match.product_id),
+        "match_type": match.match_type,
+        "competitor": _competitor_dict(row) if row is not None else None,
+        "created_at": _iso(match.created_at),
+        "updated_at": _iso(match.updated_at),
+    }
+
+
+def intelligence_to_dict(
+    item: InternalProduct,
+    result: IntelligenceResult,
+    rows: list[dict[str, Any]],
+    *,
+    detail: bool,
+) -> dict[str, Any]:
+    out: dict[str, Any] = {
+        "internal_product": internal_product_to_dict(item),
+        "competitor_count": len(rows),
+        "compared_count": len(result.comparisons),
+        "price_position": result.price_position,
+        "market": {
+            "min_price": _num(result.min_price),
+            "max_price": _num(result.max_price),
+            "avg_price": _num(result.avg_price),
+            "median_price": _num(result.median_price),
+        },
+        "map": {
+            "map_price": _num(item.map_price),
+            "own_price_below_map": result.own_price_below_map,
+            "violation_count": result.map_violation_count,
+            "has_violation": result.own_price_below_map or result.map_violation_count > 0,
+        },
+    }
+    if detail:
+        by_match = {str(r["match"].id): r for r in rows}
+        out["competitors"] = [
+            {
+                "match_id": c.match_id,
+                "match_type": by_match[c.match_id]["match"].match_type,
+                **_competitor_dict(by_match[c.match_id]),
+                "price_gap": _num(c.price_gap),
+                "price_gap_pct": _num(c.price_gap_pct),
+                "map_violation": c.map_violation,
+                "map_gap": _num(c.map_gap),
+            }
+            for c in result.comparisons
+        ]
+        out["excluded"] = [
+            {
+                "match_id": e.match_id,
+                "reason": e.reason,
+                **_competitor_dict(by_match[e.match_id]),
+            }
+            for e in result.excluded
+        ]
+    return out

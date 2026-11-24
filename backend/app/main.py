@@ -10,6 +10,9 @@ from app.api.v1.alerts import router as alerts_router
 from app.api.v1.auth import router as auth_router
 from app.api.v1.business_data import router as business_data_router
 from app.api.v1.error_mapping import domain_error_handler
+from app.api.v1.internal_products import router as internal_products_router
+from app.api.v1.price_intelligence import router as price_intelligence_router
+from app.api.v1.product_matches import router as product_matches_router
 from app.api.v1.products import router as products_router
 from app.api.v1.runs import router as runs_router
 from app.api.v1.scrapes import LegacyScrapesDeprecationMiddleware
@@ -65,6 +68,9 @@ def create_app() -> FastAPI:
     app.include_router(scrapes_router, prefix="/api/v1")
     app.include_router(alerts_router, prefix="/api/v1")
     app.include_router(tasks_router, prefix="/api/v1")
+    app.include_router(internal_products_router, prefix="/api/v1")
+    app.include_router(product_matches_router, prefix="/api/v1")
+    app.include_router(price_intelligence_router, prefix="/api/v1")
 
     return app
 

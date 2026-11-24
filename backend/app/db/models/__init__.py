@@ -10,6 +10,7 @@ from app.db.models.business_data import (
     BusinessDataSource,
 )
 from app.db.models.identity import User, Workspace, WorkspaceMember
+from app.db.models.intelligence import InternalProduct, ProductMatch
 from app.db.models.scraping import CurrentObservation, Product, Source
 
 __all__ = [
@@ -21,6 +22,8 @@ __all__ = [
     "BusinessDataSchedule",
     "BusinessDataSource",
     "CurrentObservation",
+    "InternalProduct",
+    "ProductMatch",
     "Product",
     "Source",
     "User",
