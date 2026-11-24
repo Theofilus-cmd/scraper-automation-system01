@@ -6,21 +6,30 @@ import { FormEvent, useCallback, useState } from "react";
 import { DeleteSourceControl } from "../components/delete-source-control";
 import { EmptyState, ErrorState, formatDateTime, LoadingState, PageHeader, StatusBadge } from "../components/ui";
 import { errorMessage, useAsync } from "../hooks/use-async";
-import { createSource, listAlerts, listSources, listTasks } from "../lib/api";
+import { createSource, listAlerts, listInternalProducts, listPriceIntelligence, listSources, listTasks } from "../lib/api";
 import { useSession } from "../lib/session";
 import type { Source } from "../lib/types";
 
 function Summary({ token, sources }: { token: string; sources: Source[] }) {
   const load = useCallback(async () => {
-    const [alerts, dead] = await Promise.all([
+    const [alerts, dead, internal, intel] = await Promise.all([
       listAlerts({ token, limit: 100 }),
       listTasks({ token, status: "dead_letter", limit: 100 }),
+      listInternalProducts({ token, limit: 1 }),
+      listPriceIntelligence({ token, mapViolation: true, limit: 1 }),
     ]);
-    return { alerts: alerts.data.length, more: alerts.pagination.has_more, dead: dead.data.length, deadMore: dead.pagination.has_more };
+    return {
+      alerts: alerts.data.length,
+      more: alerts.pagination.has_more,
+      dead: dead.data.length,
+      deadMore: dead.pagination.has_more,
+      catalogCount: internal.pagination.has_more ? "100+" : internal.data.length,
+      mapViolations: intel.pagination.has_more ? "10+" : intel.data.length,
+    };
   }, [token]);
   const { data } = useAsync(load);
 
-  const count = (n: number | undefined, more: boolean | undefined) =>
+  const count = (n: number | string | undefined, more?: boolean) =>
     n === undefined ? "…" : `${n}${more ? "+" : ""}`;
 
   return (
@@ -30,15 +39,23 @@ function Summary({ token, sources }: { token: string; sources: Source[] }) {
         <span className="muted">Active sources</span>
       </li>
       <li>
-        <Link href="/alerts">
-          <span className="tile-value">{count(data?.alerts, data?.more)}</span>
-          <span className="muted">Alerts</span>
+        <Link href="/internal-products">
+          <span className="tile-value">{count(data?.catalogCount)}</span>
+          <span className="muted">My Products</span>
         </Link>
       </li>
       <li>
-        <Link href="/dead-letter">
-          <span className="tile-value">{count(data?.dead, data?.deadMore)}</span>
-          <span className="muted">Dead-lettered tasks</span>
+        <Link href="/price-intelligence">
+          <span className="tile-value" style={{ color: (data?.mapViolations && data.mapViolations !== 0) ? "#b91c1c" : "inherit" }}>
+            {count(data?.mapViolations)}
+          </span>
+          <span className="muted">MAP Violations</span>
+        </Link>
+      </li>
+      <li>
+        <Link href="/alerts">
+          <span className="tile-value">{count(data?.alerts, data?.more)}</span>
+          <span className="muted">Alerts</span>
         </Link>
       </li>
     </ul>

@@ -1,4 +1,23 @@
-import type { Alert, ObservationHistoryRow, PaginatedResponse, Product, ProductDetails, Task, RegisterResponse, Run, Schedule, Source, SourceDetails, TokenResponse, TriggeredRun, User } from "./types";
+import type {
+  Alert,
+  InternalProduct,
+  ObservationHistoryRow,
+  PaginatedResponse,
+  PriceIntelligenceDetails,
+  PriceIntelligenceSummary,
+  Product,
+  ProductDetails,
+  ProductMatch,
+  RegisterResponse,
+  Run,
+  Schedule,
+  Source,
+  SourceDetails,
+  Task,
+  TokenResponse,
+  TriggeredRun,
+  User,
+} from "./types";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -297,4 +316,146 @@ export function listProductHistory(input: {
     {},
     input.token,
   );
+}
+
+export function listInternalProducts(input: {
+  token: string;
+  status?: string;
+  sku?: string;
+  q?: string;
+  cursor?: string | null;
+  limit?: number;
+}): Promise<PaginatedResponse<InternalProduct>> {
+  const params = new URLSearchParams({ limit: String(input.limit ?? 25) });
+  if (input.status) params.set("status", input.status);
+  if (input.sku) params.set("sku", input.sku);
+  if (input.q) params.set("q", input.q);
+  if (input.cursor) params.set("cursor", input.cursor);
+  return request(`/api/v1/internal-products?${params.toString()}`, {}, input.token);
+}
+
+export function createInternalProduct(input: {
+  token: string;
+  name: string;
+  sku: string;
+  own_price: string;
+  currency: string;
+  barcode?: string;
+  brand?: string;
+  category?: string;
+  map_price?: string;
+}): Promise<InternalProduct> {
+  return request(
+    "/api/v1/internal-products",
+    {
+      method: "POST",
+      body: JSON.stringify(input),
+    },
+    input.token,
+  );
+}
+
+export function getInternalProduct(input: {
+  token: string;
+  id: string;
+}): Promise<InternalProduct> {
+  return request(`/api/v1/internal-products/${input.id}`, {}, input.token);
+}
+
+export function updateInternalProduct(input: {
+  token: string;
+  id: string;
+  name?: string;
+  sku?: string;
+  own_price?: string;
+  currency?: string;
+  barcode?: string;
+  brand?: string;
+  category?: string;
+  map_price?: string;
+  status?: string;
+}): Promise<InternalProduct> {
+  return request(
+    `/api/v1/internal-products/${input.id}`,
+    {
+      method: "PATCH",
+      body: JSON.stringify(input),
+    },
+    input.token,
+  );
+}
+
+export async function deleteInternalProduct(input: {
+  token: string;
+  id: string;
+}): Promise<void> {
+  await request<unknown>(
+    `/api/v1/internal-products/${input.id}`,
+    {
+      method: "DELETE",
+    },
+    input.token,
+  );
+}
+
+export function listProductMatches(input: {
+  token: string;
+  internalProductId?: string;
+  productId?: string;
+  cursor?: string | null;
+  limit?: number;
+}): Promise<PaginatedResponse<ProductMatch>> {
+  const params = new URLSearchParams({ limit: String(input.limit ?? 25) });
+  if (input.internalProductId) params.set("internal_product_id", input.internalProductId);
+  if (input.productId) params.set("product_id", input.productId);
+  if (input.cursor) params.set("cursor", input.cursor);
+  return request(`/api/v1/product-matches?${params.toString()}`, {}, input.token);
+}
+
+export function createProductMatch(input: {
+  token: string;
+  internal_product_id: string;
+  product_id?: string;
+  product_url?: string;
+}): Promise<ProductMatch> {
+  return request(
+    "/api/v1/product-matches",
+    {
+      method: "POST",
+      body: JSON.stringify(input),
+    },
+    input.token,
+  );
+}
+
+export async function deleteProductMatch(input: {
+  token: string;
+  id: string;
+}): Promise<void> {
+  await request<unknown>(
+    `/api/v1/product-matches/${input.id}`,
+    {
+      method: "DELETE",
+    },
+    input.token,
+  );
+}
+
+export function listPriceIntelligence(input: {
+  token: string;
+  mapViolation?: boolean;
+  cursor?: string | null;
+  limit?: number;
+}): Promise<PaginatedResponse<PriceIntelligenceSummary>> {
+  const params = new URLSearchParams({ limit: String(input.limit ?? 25) });
+  if (input.mapViolation) params.set("map_violation", "true");
+  if (input.cursor) params.set("cursor", input.cursor);
+  return request(`/api/v1/price-intelligence?${params.toString()}`, {}, input.token);
+}
+
+export function getPriceIntelligenceDetails(input: {
+  token: string;
+  internalProductId: string;
+}): Promise<PriceIntelligenceDetails> {
+  return request(`/api/v1/price-intelligence/${input.internalProductId}`, {}, input.token);
 }

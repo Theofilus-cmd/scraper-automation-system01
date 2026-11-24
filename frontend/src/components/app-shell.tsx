@@ -10,55 +10,63 @@ import { LoadingState } from "./ui";
 
 const NAV = [
   { href: "/", label: "Dashboard" },
+  { href: "/internal-products", label: "My Catalog" },
+  { href: "/price-intelligence", label: "Price Intelligence" },
   { href: "/alerts", label: "Alerts" },
-  { href: "/dead-letter", label: "Dead letter" },
+  { href: "/dead-letter", label: "Dead Letter" },
 ];
 
 function Shell({ children }: { children: ReactNode }) {
   const { apiStatus, session, isRestoring, signIn, signOut } = useSession();
   const pathname = usePathname();
 
-  return (
-    <main className="app-shell">
-      <header className="app-header">
-        <div>
-          <p className="eyebrow">Product monitoring workspace</p>
-          <h1>Scraper Automation System</h1>
-        </div>
-        <p className="api-status">
-          API status: <span data-testid="api-status">{apiStatus}</span>
-        </p>
-      </header>
+  if (isRestoring) {
+    return <LoadingState label="Restoring your session…" />;
+  }
 
-      {isRestoring ? (
-        <LoadingState label="Restoring your session…" />
-      ) : session ? (
-        <>
-          <nav aria-label="Main" className="main-nav">
-            <ul>
-              {NAV.map((item) => {
-                const active =
-                  item.href === "/" ? pathname === "/" : (pathname ?? "").startsWith(item.href);
-                return (
-                  <li key={item.href}>
-                    <Link aria-current={active ? "page" : undefined} href={item.href}>
-                      {item.label}
-                    </Link>
-                  </li>
-                );
-              })}
-            </ul>
-            <span className="muted nav-user">{session.user.email}</span>
-            <button onClick={signOut} type="button">
-              Sign out
-            </button>
-          </nav>
-          {children}
-        </>
-      ) : (
+  if (!session) {
+    return (
+      <main className="auth-shell">
         <AuthPanel onAuthenticated={signIn} />
-      )}
-    </main>
+      </main>
+    );
+  }
+
+  return (
+    <div className="app-shell">
+      <aside className="sidebar">
+        <div className="sidebar-header">
+          <h1>SaaS Intelligence</h1>
+          <p className="eyebrow">v1.0</p>
+        </div>
+
+        <nav aria-label="Main" className="sidebar-nav">
+          {NAV.map((item) => {
+            const active =
+              item.href === "/" ? pathname === "/" : (pathname ?? "").startsWith(item.href);
+            return (
+              <Link key={item.href} aria-current={active ? "page" : undefined} href={item.href}>
+                {item.label}
+              </Link>
+            );
+          })}
+        </nav>
+
+        <div className="sidebar-footer">
+          <div className="api-status-mini">
+            API: <span className="status-dot" data-status={apiStatus} />
+          </div>
+          <span className="nav-user">{session.user.email}</span>
+          <button onClick={signOut} type="button">
+            Sign out
+          </button>
+        </div>
+      </aside>
+
+      <main className="content-area">
+        {children}
+      </main>
+    </div>
   );
 }
 

@@ -72,6 +72,18 @@ export function ErrorState({ message, onRetry }: { message: string; onRetry?: ()
   );
 }
 
+export function PriceGap({ gap, pct }: { gap: string | null; pct: string | null }) {
+  if (gap === null || pct === null) return null;
+  const numGap = parseFloat(gap);
+  const cls = numGap > 0 ? "price-gap-pos" : numGap < 0 ? "price-gap-neg" : "price-gap-zero";
+  const sign = numGap > 0 ? "+" : "";
+  return (
+    <span className={`price-gap ${cls}`}>
+      {sign}{parseFloat(pct).toFixed(1)}%
+    </span>
+  );
+}
+
 export function ConfirmDialog({
   title,
   message,

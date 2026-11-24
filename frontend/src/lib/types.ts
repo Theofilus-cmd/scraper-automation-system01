@@ -178,3 +178,86 @@ export type ObservationHistoryRow = Observation & {
   task_id: string;
   version_created_at: string | null;
 };
+
+export type InternalProductStatus = "active" | "archived";
+
+export type InternalProduct = {
+  id: string;
+  name: string;
+  sku: string;
+  barcode: string | null;
+  brand: string | null;
+  category: string | null;
+  own_price: string;
+  map_price: string | null;
+  currency: string;
+  status: InternalProductStatus;
+  created_at: string;
+  updated_at: string;
+};
+
+export type Competitor = {
+  product_id: string;
+  source_id: string;
+  adapter_type: string;
+  product_url: string;
+  sku: string | null;
+  product_name: string | null;
+  price: string | null;
+  currency: string | null;
+  stock_status: string | null;
+  is_valid: boolean | null;
+  scraped_at: string | null;
+};
+
+export type ProductMatch = {
+  id: string;
+  internal_product_id: string;
+  product_id: string;
+  match_type: "sku" | "url" | "manual";
+  competitor: Competitor | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type MarketSummary = {
+  min_price: string | null;
+  max_price: string | null;
+  avg_price: string | null;
+  median_price: string | null;
+};
+
+export type MapSummary = {
+  map_price: string | null;
+  own_price_below_map: boolean;
+  violation_count: number;
+  has_violation: boolean;
+};
+
+export type PriceIntelligenceComparison = Competitor & {
+  match_id: string;
+  match_type: string;
+  price_gap: string | null;
+  price_gap_pct: string | null;
+  map_violation: boolean;
+  map_gap: string | null;
+};
+
+export type PriceIntelligenceExcluded = Competitor & {
+  match_id: string;
+  reason: string;
+};
+
+export type PriceIntelligenceSummary = {
+  internal_product: InternalProduct;
+  competitor_count: number;
+  compared_count: number;
+  price_position: "lowest" | "highest" | "average" | null;
+  market: MarketSummary;
+  map: MapSummary;
+};
+
+export type PriceIntelligenceDetails = PriceIntelligenceSummary & {
+  competitors: PriceIntelligenceComparison[];
+  excluded: PriceIntelligenceExcluded[];
+};

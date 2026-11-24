@@ -217,20 +217,34 @@ function SourceDetail({ sourceId, token }: { sourceId: string; token: string }) 
         </section>
 
         <section aria-labelledby="current-heading" className="card-block">
-          <h3 id="current-heading">Current product</h3>
-          {obs ? (
+          <div style={{ display: "flex", gap: "1rem", alignItems: "flex-start", marginBottom: "1rem" }}>
+            {obs?.image_url && (
+              <div className="product-image-container" style={{ width: "80px", height: "80px" }}>
+                <img alt={obs.product_name ?? "Product"} className="product-image" src={obs.image_url} />
+              </div>
+            )}
+            <div>
+              <h3 id="current-heading" style={{ marginBottom: "0.25rem" }}>Current product</h3>
+              {obs ? (
+                <p style={{ margin: 0, fontWeight: 700 }}>{obs.product_name ?? "—"}</p>
+              ) : (
+                <p className="muted">No data scraped yet.</p>
+              )}
+            </div>
+          </div>
+          {obs && (
             <dl className="facts">
-              <dt>Name</dt>
-              <dd>{obs.product_name ?? "—"}</dd>
               <dt>Price</dt>
-              <dd>{obs.price ? `${obs.price} ${obs.currency ?? ""}` : "—"}</dd>
+              <dd><strong>{obs.price ? `${obs.price} ${obs.currency ?? ""}` : "—"}</strong></dd>
               <dt>Stock</dt>
-              <dd>{formatLabel(obs.stock_status)}</dd>
+              <dd><StatusBadge status={obs.stock_status} /></dd>
+              <dt>Brand</dt>
+              <dd>{obs.brand ?? "—"}</dd>
+              <dt>Category</dt>
+              <dd>{obs.category ?? "—"}</dd>
               <dt>Scraped</dt>
               <dd>{formatDateTime(obs.scraped_at)}</dd>
             </dl>
-          ) : (
-            <p className="muted">No data scraped yet. Run the source to collect it.</p>
           )}
         </section>
       </div>
