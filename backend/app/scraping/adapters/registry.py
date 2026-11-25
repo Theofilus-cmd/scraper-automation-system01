@@ -10,12 +10,25 @@ an error condition.
 
 from __future__ import annotations
 
+from app.scraping.adapters.alibaba import AlibabaAdapter
+from app.scraping.adapters.amazon import AmazonUSAdapter
 from app.scraping.adapters.base import SourceAdapter
+from app.scraping.adapters.ebay import EbayUSAdapter
+from app.scraping.adapters.etsy import EtsyAdapter
 from app.scraping.adapters.mock_store import MockStoreAdapter
 from app.scraping.adapters.shopify import ShopifyAdapter
+from app.scraping.adapters.tiktok import TikTokShopUSAdapter
 from app.scraping.types import SiteSniff
 
-ADAPTERS: list[SourceAdapter] = [MockStoreAdapter(), ShopifyAdapter()]
+ADAPTERS: list[SourceAdapter] = [
+    MockStoreAdapter(),
+    ShopifyAdapter(),
+    AmazonUSAdapter(),
+    EbayUSAdapter(),
+    EtsyAdapter(),
+    TikTokShopUSAdapter(),
+    AlibabaAdapter(),
+]
 
 # doc 08 §2's confidence floor below which a match is not trusted. With no
 # generic adapter yet to fall back to, anything at or below this floor
