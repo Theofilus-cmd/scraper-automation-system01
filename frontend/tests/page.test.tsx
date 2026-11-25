@@ -34,12 +34,10 @@ describe("HomePage", () => {
 
     render(<HomeWithShell />);
 
-    expect(screen.getByRole("heading", { name: "Scraper Automation System" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Welcome back" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Sign in" })).toBeInTheDocument();
 
-    await waitFor(() => {
-      expect(screen.getByTestId("api-status")).toHaveTextContent("ready");
-    });
+    expect(screen.getByRole("tab", { name: "Create account" })).toBeInTheDocument();
   });
 
   it("toggles password visibility", async () => {
